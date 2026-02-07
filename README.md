@@ -6,7 +6,6 @@ A CLI tool that extracts your podcast listening history from Apple Podcasts, fet
 
 - **Apple Podcasts Integration**: Reads your listening history directly from the Apple Podcasts database
 - **YouTube Transcript Fetching**: Automatically finds and downloads transcripts from YouTube
-- **Stratechery Support**: Fetches transcripts from Stratechery's paid podcast feed (requires subscription)
 - **AI Summarization**: Generates structured summaries using Claude, GPT-4, or other LLMs
 - **Multiple Output Formats**: Markdown files with YAML frontmatter + Google Sheets export
 - **Interactive Selection**: Choose which episodes to summarize with a TUI interface
@@ -141,6 +140,8 @@ python3 -m src.cli -n 10 -m opus
 
 Export your summaries to a Google Sheet for easy browsing and sharing.
 
+**Example:** [Podcast Summaries Sheet](https://docs.google.com/spreadsheets/d/1cBK3nWIyzMWAepBTQSNnR-LrhNy8X4-230MzRcpbdMA/edit?gid=1445827789#gid=1445827789)
+
 ### Setup
 
 1. Create a Google Cloud project and enable the Sheets API
@@ -228,15 +229,6 @@ python3 -m src.cli --refresh-cookies --browser firefox
 python3 -m src.cli --set-cookies ~/cookies.txt
 ```
 
-### Stratechery Cookies
-
-For Stratechery podcast transcripts (requires paid subscription):
-
-```bash
-# Extract Stratechery session cookies from browser
-python3 -m src.cli --refresh-stratechery-cookies
-```
-
 ## Troubleshooting
 
 ### "No transcript found" for an episode
@@ -292,7 +284,6 @@ Podcastwise/
 │   ├── cli.py          # Command-line interface
 │   ├── podcast_db.py   # Apple Podcasts database reader
 │   ├── youtube.py      # YouTube transcript fetcher
-│   ├── stratechery.py  # Stratechery transcript fetcher
 │   ├── summarizer.py   # AI summarization (Claude/GPT)
 │   ├── markdown.py     # Markdown file generation
 │   ├── sheets.py       # Google Sheets export
