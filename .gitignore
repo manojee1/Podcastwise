@@ -1,0 +1,28 @@
+# Environment variables (contains API keys)
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Cache (transcripts are stored elsewhere)
+.cache/
+
+# Editor/Tool settings
+.obsidian/
+.claude/
