@@ -237,6 +237,7 @@ class PodcastSummary:
     takeaways: list[str]
     references: dict  # {books: [], people: [], tools: [], links: []}
     categories: list[str]
+    guests: list[str] = field(default_factory=list)  # Guest names (not the host)
 
     def to_dict(self) -> dict:
         return {
@@ -248,6 +249,7 @@ class PodcastSummary:
             "takeaways": self.takeaways,
             "references": self.references,
             "categories": self.categories,
+            "guests": self.guests,
         }
 
 
@@ -270,6 +272,8 @@ Analyze this transcript and extract the following information. Return your respo
   "tldr": "A 2-3 sentence summary capturing the main topic and key conclusion. What would you tell someone who asks 'what was this episode about?'",
 
   "who_should_listen": "One sentence describing the ideal audience. Example: 'Anyone interested in AI safety' or 'Founders raising their first round'",
+
+  "guests": ["List of guest names appearing on this episode. Do NOT include the host. If there are no guests (solo episode), return an empty array."],
 
   "key_insights": [
     "3-7 key insights or 'aha moments' from the episode. Novel ideas, counterintuitive findings, or things that shift thinking."
@@ -310,6 +314,7 @@ Important guidelines:
 - If no books/people/tools were mentioned, use empty arrays
 - Keep the tldr concise but informative
 - Categories should reflect the PRIMARY topics, not tangential mentions
+- For guests, identify people who are interviewed or appear as guests, not the host
 
 Return ONLY the JSON object, no additional text."""
 
@@ -420,6 +425,7 @@ def _summarize_single(
         takeaways=data.get("takeaways", []),
         references=data.get("references", {"books": [], "people": [], "tools": [], "links": []}),
         categories=data.get("categories", []),
+        guests=data.get("guests", []),
     )
 
 
@@ -508,6 +514,7 @@ def _summarize_chunked(
         takeaways=data.get("takeaways", []),
         references=data.get("references", {"books": [], "people": [], "tools": [], "links": []}),
         categories=data.get("categories", []),
+        guests=data.get("guests", []),
     )
 
 

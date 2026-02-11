@@ -50,6 +50,7 @@ def run_pipeline(
     rate_limit: bool = True,
     model: str = None,
     overwrite: bool = False,
+    youtube_url: str = None,
 ) -> list[PipelineResult]:
     """
     Run the full summarization pipeline on selected episodes.
@@ -61,6 +62,7 @@ def run_pipeline(
         retry_no_transcript: Retry episodes previously marked as no transcript
         model: Model alias (e.g., 'sonnet', 'haiku', 'gpt-4o')
         overwrite: If True, overwrite existing markdown files. If False, skip if exists.
+        youtube_url: Optional YouTube URL to use instead of searching (only valid for single episode)
 
     Returns:
         List of PipelineResult objects
@@ -129,7 +131,7 @@ def run_pipeline(
         for ep in to_process:
             progress.update(task, description=f"[cyan]{ep.podcast_name[:25]}[/cyan]")
 
-            result = _process_single_episode(ep, state, retry_no_transcript, rate_limit, model, overwrite)
+            result = _process_single_episode(ep, state, retry_no_transcript, rate_limit, model, overwrite, youtube_url)
             results.append(result)
 
             progress.advance(task)
@@ -144,6 +146,7 @@ def _process_single_episode(
     rate_limit: bool = True,
     model: str = None,
     overwrite: bool = False,
+    youtube_url: str = None,
 ) -> PipelineResult:
     """Process a single episode through the full pipeline."""
 
@@ -152,7 +155,7 @@ def _process_single_episode(
         if retry_no_transcript:
             clear_not_found(episode.id)
 
-        transcript = fetch_transcript_for_episode(episode, use_cache=True)
+        transcript = fetch_transcript_for_episode(episode, use_cache=True, youtube_url=youtube_url)
 
         if not transcript:
             # Mark as no transcript
@@ -277,6 +280,182 @@ def show_processing_status() -> None:
         for ep in recent:
             status_icon = "✓" if ep.status == "success" else "✗" if ep.status == "error" else "?"
             console.print(f"  {status_icon} {ep.podcast_name[:25]}: {ep.episode_title[:35]}...")
+
+
+def run_pipeline_with_progress(
+    episodes: list[Episode],
+    force: bool = False,
+    retry_no_transcript: bool = False,
+    rate_limit: bool = True,
+    model: str = None,
+    progress_callback=None,
+) -> list[PipelineResult]:
+    """
+    Run the pipeline with progress callbacks for web UI.
+
+    Args:
+        episodes: List of episodes to process
+        force: Re-process even if already summarized
+        retry_no_transcript: Retry episodes marked as no transcript
+        rate_limit: Apply rate limiting
+        model: Model alias
+        progress_callback: Function to call with progress updates
+
+    Returns:
+        List of PipelineResult objects
+    """
+    state = get_state_manager()
+    results = []
+
+    def emit(event):
+        if progress_callback:
+            progress_callback(event)
+
+    # First pass: filter episodes
+    to_process = []
+    for ep in episodes:
+        if not force and state.is_processed(ep.id):
+            processed = state.get_processed(ep.id)
+            if processed.status == "success":
+                results.append(PipelineResult(
+                    episode=ep,
+                    status="skipped",
+                    output_file=Path(processed.output_file) if processed.output_file else None,
+                ))
+                continue
+            elif processed.status == "no_transcript" and not retry_no_transcript:
+                results.append(PipelineResult(
+                    episode=ep,
+                    status="no_transcript",
+                    error_message="Previously marked as no transcript available",
+                ))
+                continue
+        to_process.append(ep)
+
+    total = len(to_process)
+    completed = 0
+
+    for ep in to_process:
+        # Emit episode start
+        emit({
+            'type': 'episode_start',
+            'episode_id': str(ep.id),
+            'podcast_name': ep.podcast_name,
+            'title': ep.title
+        })
+
+        # Process with step progress
+        result = _process_single_episode_with_progress(
+            episode=ep,
+            state=state,
+            retry_no_transcript=retry_no_transcript,
+            rate_limit=rate_limit,
+            model=model,
+            progress_callback=lambda step, pct: emit({
+                'type': 'progress',
+                'step': step,
+                'percent': pct
+            })
+        )
+        results.append(result)
+        completed += 1
+
+        # Emit episode complete
+        emit({
+            'type': 'episode_complete',
+            'episode_id': str(ep.id),
+            'title': ep.title,
+            'status': result.status,
+            'completed': completed,
+            'total': total
+        })
+
+    return results
+
+
+def _process_single_episode_with_progress(
+    episode: Episode,
+    state: StateManager,
+    retry_no_transcript: bool,
+    rate_limit: bool = True,
+    model: str = None,
+    progress_callback=None,
+) -> PipelineResult:
+    """Process a single episode with step progress callbacks."""
+
+    def emit(step, pct):
+        if progress_callback:
+            progress_callback(step, pct)
+
+    try:
+        # Step 1: Fetch transcript
+        emit("Fetching transcript...", 10)
+
+        if retry_no_transcript:
+            clear_not_found(episode.id)
+
+        transcript = fetch_transcript_for_episode(episode, use_cache=True)
+
+        if not transcript:
+            state.mark_no_transcript(
+                episode_id=episode.id,
+                podcast_name=episode.podcast_name,
+                episode_title=episode.title,
+            )
+            mark_not_found(episode.id)
+            return PipelineResult(
+                episode=episode,
+                status="no_transcript",
+                error_message="No YouTube transcript found",
+            )
+
+        emit("Transcript fetched", 30)
+
+        # Step 2: Summarize
+        emit("Generating summary with LLM...", 40)
+        summary = summarize_transcript(episode, transcript, model=model, rate_limit=rate_limit)
+        emit("Summary generated", 70)
+
+        # Step 2.5: Cache summary
+        cache_summary(episode.id, summary)
+        emit("Summary cached", 80)
+
+        # Step 3: Generate markdown
+        emit("Writing markdown...", 85)
+        output_file = write_summary(episode, summary, transcript, overwrite=False)
+        emit("Markdown written", 95)
+
+        # Step 4: Update state
+        state.mark_processed(
+            episode_id=episode.id,
+            podcast_name=episode.podcast_name,
+            episode_title=episode.title,
+            output_file=str(output_file),
+            video_id=transcript.video_id,
+            status="success",
+        )
+        emit("Complete", 100)
+
+        return PipelineResult(
+            episode=episode,
+            status="success",
+            output_file=output_file,
+            transcript=transcript,
+            summary=summary,
+        )
+
+    except Exception as e:
+        state.mark_error(
+            episode_id=episode.id,
+            podcast_name=episode.podcast_name,
+            episode_title=episode.title,
+            error=str(e),
+        )
+        return PipelineResult(
+            episode=episode,
+            status="error",
+            error_message=str(e),
+        )
 
 
 if __name__ == "__main__":

@@ -10,6 +10,8 @@ Usage:
     podcastwise -p "stratechery"   # Filter by podcast name
     podcastwise --dry-run          # Preview without processing
     podcastwise --force            # Re-process already summarized episodes
+    podcastwise -n 1 --youtube-url "https://youtu.be/VIDEO_ID"
+                                   # Use specific YouTube URL for an episode
 """
 
 import argparse
@@ -19,9 +21,12 @@ from rich.console import Console
 
 from .podcast_db import get_episodes_since, get_episode_count_by_podcast, Episode
 from .state import get_state_manager
-from .sheets import export_to_sheets
+from .sheets import export_to_sheets, cleanup_all_sheets, sync_export_state
 from .summarizer import get_available_models, DEFAULT_MODEL, MODEL_CONFIG
-from .youtube import extract_cookies, has_cookies, set_cookie_file, DEFAULT_BROWSER, COOKIE_FILE
+from .youtube import (
+    extract_cookies, has_cookies, set_cookie_file, DEFAULT_BROWSER, COOKIE_FILE,
+    load_not_found, clear_not_found_matching, get_not_found_count
+)
 from .stratechery import extract_stratechery_cookies, has_stratechery_cookies
 
 
@@ -156,6 +161,84 @@ def cmd_status(args):
     show_processing_status()
 
 
+def cmd_retry_episodes(args):
+    """
+    Clear specific episodes from the not-found cache based on search terms,
+    then immediately process them.
+
+    This allows retrying transcript fetch for episodes that previously failed,
+    using the improved search query building logic.
+    """
+    search_terms = args.retry_episodes
+
+    console.print(f"\n[bold]Searching for episodes matching: {', '.join(search_terms)}[/bold]")
+
+    # Get all episodes
+    episodes = get_episodes_since()
+
+    # Get not-found episode IDs
+    not_found_ids = load_not_found()
+
+    if not not_found_ids:
+        console.print("[yellow]No episodes in not-found cache.[/yellow]")
+        return
+
+    console.print(f"[dim]Not-found cache contains {len(not_found_ids)} episodes[/dim]\n")
+
+    # Find matching episodes
+    matches = []
+    for ep in episodes:
+        if ep.id not in not_found_ids:
+            continue
+
+        # Check if any search term matches podcast name or title
+        text = f"{ep.podcast_name} {ep.title}".lower()
+        for term in search_terms:
+            if term.lower() in text:
+                matches.append(ep)
+                break
+
+    if not matches:
+        console.print("[yellow]No matching episodes found in not-found cache.[/yellow]")
+        console.print("[dim]Try different search terms, or check if episodes are already processed.[/dim]")
+        return
+
+    console.print(f"[green]Found {len(matches)} matching episodes:[/green]")
+    for ep in matches:
+        console.print(f"  - {ep.podcast_name}: {ep.title[:50]}...")
+
+    # Clear from not-found cache
+    cleared = clear_not_found_matching([ep.id for ep in matches])
+    console.print(f"\n[cyan]Cleared {cleared} episodes from not-found cache.[/cyan]")
+
+    # Also clear from state manager so they show as unprocessed
+    state = get_state_manager()
+    state_cleared = 0
+    for ep in matches:
+        if state.is_processed(ep.id):
+            state.clear(ep.id)
+            state_cleared += 1
+
+    if state_cleared > 0:
+        console.print(f"[cyan]Cleared {state_cleared} episodes from processing state.[/cyan]")
+
+    # Process the matched episodes immediately
+    if args.dry_run:
+        console.print("\n[yellow]DRY RUN - would process these episodes[/yellow]")
+    else:
+        console.print(f"\n[cyan]Processing {len(matches)} episodes...[/cyan]")
+        from .pipeline import run_pipeline, print_pipeline_summary
+        results = run_pipeline(
+            episodes=matches,
+            force=False,
+            dry_run=False,
+            retry_no_transcript=False,
+            rate_limit=True,
+            model=args.model,
+        )
+        print_pipeline_summary(results)
+
+
 def cmd_export_sheets(args):
     """Export summaries to Google Sheets."""
     console.print("[bold]Exporting to Google Sheets...[/bold]\n")
@@ -176,6 +259,37 @@ def cmd_export_sheets(args):
     console.print(f"[blue]Duplicates:[/blue] {result['duplicates']}")
     console.print(f"[yellow]Skipped:[/yellow]   {result['skipped']} (no cached summary)")
     console.print(f"[red]Errors:[/red]     {result['errors']}")
+
+
+def cmd_cleanup_sheets(args):
+    """Remove duplicate rows from Google Sheets."""
+    console.print("[bold]Cleaning up duplicates in Google Sheets...[/bold]\n")
+
+    result = cleanup_all_sheets()
+
+    console.print("\n" + "=" * 50)
+    console.print("[bold]Cleanup Summary[/bold]")
+    console.print("=" * 50)
+    if "error" in result:
+        console.print(f"[red]Error:[/red] {result['error']}")
+    else:
+        console.print(f"[green]Total rows deleted:[/green] {result['total_deleted']}")
+
+
+def cmd_sync_export_state(args):
+    """Sync local export state with Google Sheet."""
+    console.print("[bold]Syncing export state with Google Sheet...[/bold]\n")
+
+    result = sync_export_state()
+
+    console.print("\n" + "=" * 50)
+    console.print("[bold]Sync Summary[/bold]")
+    console.print("=" * 50)
+    if "error" in result:
+        console.print(f"[red]Error:[/red] {result['error']}")
+    else:
+        console.print(f"[green]Episodes marked as exported:[/green] {result['synced']}")
+        console.print(f"[dim]Total titles in sheet:[/dim] {result['total_in_sheet']}")
 
 
 def cmd_run(args):
@@ -263,6 +377,22 @@ def cmd_run(args):
             console.print("\n[yellow]Selection cancelled.[/yellow]")
             return
 
+    # Validate --youtube-url usage
+    if args.youtube_url:
+        if len(selected) != 1:
+            console.print("[red]Error: --youtube-url can only be used with exactly 1 episode selected.[/red]")
+            console.print(f"[dim]You have {len(selected)} episodes selected. Use -n 1 or select only one episode.[/dim]")
+            return
+        # Validate URL format
+        from .youtube import extract_video_id
+        if not extract_video_id(args.youtube_url):
+            console.print(f"[red]Error: Invalid YouTube URL format: {args.youtube_url}[/red]")
+            console.print("[dim]Supported formats:[/dim]")
+            console.print("[dim]  - https://www.youtube.com/watch?v=VIDEO_ID[/dim]")
+            console.print("[dim]  - https://youtu.be/VIDEO_ID[/dim]")
+            return
+        console.print(f"\n[cyan]Using manual YouTube URL: {args.youtube_url}[/cyan]")
+
     console.print("\n[green]Starting pipeline...[/green]")
 
     # Run the full pipeline
@@ -274,18 +404,17 @@ def cmd_run(args):
         rate_limit=not args.no_rate_limit,
         model=model,
         overwrite=args.overwrite,
+        youtube_url=args.youtube_url,
     )
 
     print_pipeline_summary(results)
 
-    # Auto-sync to Google Sheets if enabled
+    # Auto-sync to Google Sheets if enabled (always run, not just when new summaries created)
     if args.auto_sync and not args.dry_run:
-        successful = [r for r in results if r.status == "success"]
-        if successful:
-            console.print("\n[cyan]Auto-syncing to Google Sheets...[/cyan]")
-            episodes_for_export = get_episodes_since()
-            export_result = export_to_sheets(episodes=episodes_for_export)
-            console.print(f"[green]Exported {export_result['exported']} episodes to Google Sheets[/green]")
+        console.print("\n[cyan]Auto-syncing to Google Sheets...[/cyan]")
+        episodes_for_export = get_episodes_since()
+        export_result = export_to_sheets(episodes=episodes_for_export)
+        console.print(f"[green]Exported {export_result['exported']} episodes, {export_result['duplicates']} already synced[/green]")
 
 
 def main():
@@ -302,6 +431,8 @@ Examples:
   podcastwise --status            Show processing status
   podcastwise --dry-run           Preview without processing
   podcastwise --force             Re-process already summarized
+  podcastwise -n 1 -p "cheeky" --youtube-url "https://youtu.be/VIDEO_ID"
+                                  Use specific YouTube URL for an episode
         """
     )
 
@@ -325,6 +456,16 @@ Examples:
         '--export-sheets',
         action='store_true',
         help='Export summaries to Google Sheets'
+    )
+    parser.add_argument(
+        '--cleanup-sheets',
+        action='store_true',
+        help='Remove duplicate rows from Google Sheets (keeps most recent)'
+    )
+    parser.add_argument(
+        '--sync-export-state',
+        action='store_true',
+        help='Sync local export state with Google Sheet (one-time migration)'
     )
 
     # Filters
@@ -432,6 +573,19 @@ Examples:
         default=None,
         help=f'Browser to extract cookies from (chrome, firefox, safari, edge, brave). Default: {DEFAULT_BROWSER}'
     )
+    parser.add_argument(
+        '--youtube-url',
+        type=str,
+        default=None,
+        metavar='URL',
+        help='Use this YouTube URL directly instead of searching (only valid with 1 episode selected)'
+    )
+    parser.add_argument(
+        '--retry-episodes',
+        nargs='+',
+        metavar='TERM',
+        help='Clear specific episodes from not-found cache by search terms. Example: --retry-episodes "Satya Nadella" "20VC"'
+    )
 
     args = parser.parse_args()
 
@@ -484,6 +638,8 @@ Examples:
             if provider == "openrouter":
                 console.print(f"  {alias:<12} → {model_id}")
         console.print("\n[dim]Set default in .env: DEFAULT_MODEL=haiku[/dim]")
+    elif args.retry_episodes:
+        cmd_retry_episodes(args)
     elif args.list:
         cmd_list(args)
     elif args.stats:
@@ -492,6 +648,10 @@ Examples:
         cmd_status(args)
     elif args.export_sheets:
         cmd_export_sheets(args)
+    elif args.cleanup_sheets:
+        cmd_cleanup_sheets(args)
+    elif args.sync_export_state:
+        cmd_sync_export_state(args)
     else:
         cmd_run(args)
 

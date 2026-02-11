@@ -208,26 +208,102 @@ class Transcript:
         return None
 
 
-def build_search_query(episode: Episode) -> str:
-    """Build a YouTube search query from episode metadata."""
-    # Clean up the title - remove common patterns that might hurt search
+def extract_video_id(url: str) -> Optional[str]:
+    """
+    Extract video ID from a YouTube URL.
+
+    Supports:
+    - https://www.youtube.com/watch?v=VIDEO_ID
+    - https://youtu.be/VIDEO_ID
+    - https://youtu.be/VIDEO_ID?si=... (with tracking params)
+
+    Args:
+        url: YouTube URL
+
+    Returns:
+        Video ID or None if URL format is invalid
+    """
+    # Match youtube.com/watch?v=VIDEO_ID
+    match = re.match(r'(?:https?://)?(?:www\.)?youtube\.com/watch\?v=([a-zA-Z0-9_-]+)', url)
+    if match:
+        return match.group(1)
+
+    # Match youtu.be/VIDEO_ID (with optional query params)
+    match = re.match(r'(?:https?://)?youtu\.be/([a-zA-Z0-9_-]+)', url)
+    if match:
+        return match.group(1)
+
+    return None
+
+
+def build_search_query(episode: Episode, variant: str = "primary") -> str:
+    """
+    Build a YouTube search query from episode metadata.
+
+    Args:
+        episode: The podcast episode
+        variant: Query variant to build:
+            - "primary": Full cleaned query (default)
+            - "short_title": Podcast name + truncated title (40 chars)
+            - "title_only": Just the title (for clip-sharing podcasts)
+            - "guest_focused": Podcast name + extracted guest names
+
+    Returns:
+        Search query string
+    """
+    # 1. Clean podcast name - extract core name before parentheses/pipes
+    podcast_name = episode.podcast_name
+    podcast_name = re.sub(r'\s*\([^)]*\).*$', '', podcast_name)  # Remove (...) and everything after
+    podcast_name = re.sub(r'\s*\|.*$', '', podcast_name)         # Remove | suffix
+    podcast_name = podcast_name.strip()
+
+    # 2. Clean title - remove episode numbers and pipe suffixes
     title = episode.title
+    title = re.sub(r'^#?\d+\s*[-–:]\s*', '', title)              # Episode numbers like "#123 - "
+    title = re.sub(r'^Ep\.?\s*\d+\s*[-–:]\s*', '', title, flags=re.IGNORECASE)  # "Ep. 45:"
+    title = re.sub(r'\s*\|.*$', '', title)                        # Pipe suffixes
+    title = title.strip()
 
-    # Remove episode numbers like "#123 - " or "Ep. 45:"
-    title = re.sub(r'^#?\d+\s*[-–:]\s*', '', title)
-    title = re.sub(r'^Ep\.?\s*\d+\s*[-–:]\s*', '', title, flags=re.IGNORECASE)
+    # 3. Extract guest names from title patterns
+    # Patterns: "John Smith & Jane Doe:" or "with John Smith" or "John Smith on Topic"
+    guest_names = ""
+    guest_match = re.search(r'^([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?(?:\s*[&,]\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)*)\s*[:\-–]', title)
+    if guest_match:
+        guest_names = guest_match.group(1)
+    else:
+        # Try "with Guest Name" pattern
+        with_match = re.search(r'\bwith\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)', title, re.IGNORECASE)
+        if with_match:
+            guest_names = with_match.group(1)
 
-    # Remove "| Podcast Name" suffixes that some podcasts add
-    title = re.sub(r'\s*\|.*$', '', title)
+    # 4. Build query based on variant
+    if variant == "title_only":
+        # Just the title - useful for clip-sharing podcasts where the podcast name
+        # doesn't match the original source
+        if len(title) > 60:
+            title = title[:60]
+        return title
 
-    # Truncate if too long (YouTube search works better with shorter queries)
-    if len(title) > 80:
-        title = title[:80]
+    if variant == "short_title":
+        # Podcast name + short title
+        short_title = title[:40] if len(title) > 40 else title
+        return f"{podcast_name} {short_title}".strip()
 
-    # Combine podcast name and cleaned title
-    query = f"{episode.podcast_name} {title}"
+    if variant == "guest_focused" and guest_names:
+        # Podcast name + guest names (if extracted)
+        return f"{podcast_name} {guest_names}".strip()
 
-    return query
+    # Primary variant (default)
+    if guest_names:
+        # If we have guest names, use them as they're often more specific
+        query = f"{podcast_name} {guest_names}"
+    else:
+        # Truncate title to 60 chars for better matching
+        if len(title) > 60:
+            title = title[:60]
+        query = f"{podcast_name} {title}"
+
+    return query.strip()
 
 
 def search_youtube(query: str, max_results: int = 5) -> list[YouTubeMatch]:
@@ -265,6 +341,37 @@ def search_youtube(query: str, max_results: int = 5) -> list[YouTubeMatch]:
                     ))
 
     return matches
+
+
+def search_youtube_with_fallback(episode: Episode, max_results: int = 5) -> list[YouTubeMatch]:
+    """
+    Search YouTube for videos matching a podcast episode, trying multiple strategies.
+
+    Tries different query variants to improve matching for podcasts that:
+    - Have complex names with subtitles (e.g., "20VC: Venture Capital | Funding")
+    - Share clips from other shows (e.g., "Cheeky Pint" sharing Nadella interview)
+    - Have guest names in titles
+
+    Args:
+        episode: The podcast episode to search for
+        max_results: Maximum results per search query
+
+    Returns:
+        List of YouTubeMatch objects from the first successful search
+    """
+    # Build query variants to try
+    variants = ["primary", "guest_focused", "short_title", "title_only"]
+
+    for variant in variants:
+        query = build_search_query(episode, variant=variant)
+        if not query:
+            continue
+
+        matches = search_youtube(query, max_results)
+        if matches:
+            return matches
+
+    return []
 
 
 def get_transcript(video_id: str) -> Optional[tuple[str, list[dict]]]:
@@ -358,19 +465,22 @@ def find_best_match(episode: Episode, matches: list[YouTubeMatch]) -> Optional[Y
 
 def fetch_transcript_for_episode(
     episode: Episode,
-    use_cache: bool = True
+    use_cache: bool = True,
+    youtube_url: Optional[str] = None,
 ) -> Optional[Transcript]:
     """
     Fetch transcript for a podcast episode.
 
     1. Check cache first (if use_cache=True)
-    2. For Stratechery episodes, try blog first
-    3. Fall back to YouTube search
-    4. Cache the result
+    2. If youtube_url provided, use that directly
+    3. For Stratechery episodes, try blog first
+    4. Fall back to YouTube search
+    5. Cache the result
 
     Args:
         episode: Episode to fetch transcript for
         use_cache: Whether to check/use cached transcripts
+        youtube_url: Optional YouTube URL to use instead of searching
 
     Returns:
         Transcript object or None if not found
@@ -381,6 +491,30 @@ def fetch_transcript_for_episode(
         if cached:
             return cached
 
+    # If a YouTube URL is provided, use it directly
+    if youtube_url:
+        video_id = extract_video_id(youtube_url)
+        if not video_id:
+            raise ValueError(f"Invalid YouTube URL format: {youtube_url}")
+
+        result = get_transcript(video_id)
+        if not result:
+            return None
+
+        full_text, segments = result
+        transcript = Transcript(
+            episode_id=episode.id,
+            video_id=video_id,
+            video_url=youtube_url,
+            text=full_text,
+            segments=segments,
+        )
+
+        if use_cache:
+            transcript.save_to_cache()
+
+        return transcript
+
     # Try Stratechery blog first for Stratechery episodes
     from .stratechery import is_stratechery, fetch_stratechery_transcript
     if is_stratechery(episode):
@@ -390,9 +524,18 @@ def fetch_transcript_for_episode(
                 transcript.save_to_cache()
             return transcript
 
-    # Build search query and search YouTube
-    query = build_search_query(episode)
-    matches = search_youtube(query)
+    # Try JP Morgan website for Eye on the Market episodes
+    from .jpmorgan import is_eye_on_the_market, fetch_jpmorgan_transcript
+    if is_eye_on_the_market(episode):
+        transcript = fetch_jpmorgan_transcript(episode)
+        if transcript:
+            if use_cache:
+                transcript.save_to_cache()
+            return transcript
+        # Fall through to YouTube search if JP Morgan fetch fails
+
+    # Search YouTube with fallback strategy (tries multiple query variants)
+    matches = search_youtube_with_fallback(episode)
 
     if not matches:
         return None
@@ -461,6 +604,31 @@ def clear_not_found(episode_id: int) -> None:
     not_found = load_not_found()
     not_found.discard(episode_id)
     save_not_found(not_found)
+
+
+def clear_not_found_matching(episode_ids: list[int]) -> int:
+    """
+    Clear multiple episodes from the not-found list.
+
+    Args:
+        episode_ids: List of episode IDs to clear
+
+    Returns:
+        Number of episodes actually cleared (were in the list)
+    """
+    not_found = load_not_found()
+    cleared = 0
+    for ep_id in episode_ids:
+        if ep_id in not_found:
+            not_found.discard(ep_id)
+            cleared += 1
+    save_not_found(not_found)
+    return cleared
+
+
+def get_not_found_count() -> int:
+    """Get the count of episodes in the not-found list."""
+    return len(load_not_found())
 
 
 if __name__ == "__main__":

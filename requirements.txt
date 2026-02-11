@@ -16,3 +16,7 @@ requests>=2.28.0        # HTTP requests for Stratechery API
 # Google Sheets export
 gspread>=6.0.0          # Google Sheets API wrapper
 google-auth>=2.0.0      # Google authentication
+
+# Web UI
+flask>=3.0.0            # Web framework
+feedparser>=6.0.0       # RSS feed parsing

@@ -26,6 +26,7 @@ class ProcessedEpisode:
     output_file: str
     video_id: Optional[str] = None
     status: str = "success"  # success, error, no_transcript
+    exported_to_sheets: bool = False
 
 
 class StateManager:
@@ -125,6 +126,18 @@ class StateManager:
         """Clear all processed state."""
         self._state = {}
         self._save()
+
+    def mark_exported(self, episode_id: int) -> None:
+        """Mark an episode as exported to Google Sheets."""
+        if episode_id in self._state:
+            self._state[episode_id].exported_to_sheets = True
+            self._save()
+
+    def is_exported(self, episode_id: int) -> bool:
+        """Check if episode has been exported to Google Sheets."""
+        if episode_id in self._state:
+            return self._state[episode_id].exported_to_sheets
+        return False
 
     def get_stats(self) -> dict:
         """Get processing statistics."""
