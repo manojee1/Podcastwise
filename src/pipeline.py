@@ -20,10 +20,9 @@ from .youtube import (
     is_not_found,
     mark_not_found,
     clear_not_found,
-    CACHE_DIR,
 )
 from .summarizer import summarize_transcript, PodcastSummary
-from .markdown import write_summary, OUTPUT_DIR
+from .markdown import write_summary, get_output_dir
 from .state import get_state_manager, StateManager
 from .sheets import cache_summary
 
@@ -258,7 +257,7 @@ def print_pipeline_summary(results: list[PipelineResult]) -> None:
             console.print(f"  - {r.episode.title[:40]}: {r.error_message}")
 
     # Output directory
-    console.print(f"\n[dim]Output directory: {OUTPUT_DIR}[/dim]")
+    console.print(f"\n[dim]Output directory: {get_output_dir()}[/dim]")
 
 
 def show_processing_status() -> None:

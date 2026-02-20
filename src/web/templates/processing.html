@@ -1,0 +1,399 @@
+{% extends "base.html" %}
+
+{% block title %}Processing - Podcastwise{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Episode Processing</h1>
+    <p class="subtitle">Process episodes to generate summaries</p>
+</div>
+
+<!-- Processing Queue -->
+<section class="panel processing-queue">
+    <div class="panel-header">
+        <h2>Processing Queue</h2>
+        <span class="badge" id="queue-count">0</span>
+    </div>
+
+    <div class="queue-controls">
+        <button class="btn btn-primary" id="start-processing" disabled>Start Processing</button>
+        <button class="btn btn-secondary" id="cancel-processing" style="display: none;">Cancel</button>
+
+        <div class="processing-options">
+            <label>
+                <input type="checkbox" id="option-force"> Force reprocess
+            </label>
+            <label>
+                <input type="checkbox" id="option-retry-no-transcript"> Retry "no transcript"
+            </label>
+        </div>
+    </div>
+
+    <div class="queue-list" id="queue-list">
+        <div class="empty-state">
+            <p>No episodes in queue.</p>
+            <p class="hint">Select episodes from the <a href="/episodes">Episodes</a> page to process them.</p>
+        </div>
+    </div>
+</section>
+
+<!-- Live Progress -->
+<section class="panel progress-panel" id="progress-panel" style="display: none;">
+    <div class="panel-header">
+        <h2>Progress</h2>
+        <span class="processing-status" id="processing-status">Starting...</span>
+    </div>
+
+    <div class="overall-progress">
+        <div class="progress-bar">
+            <div class="progress-fill" id="overall-progress-fill" style="width: 0%"></div>
+        </div>
+        <span class="progress-text" id="overall-progress-text">0 / 0</span>
+    </div>
+
+    <div class="current-episode" id="current-episode">
+        <h3>Current Episode</h3>
+        <div class="episode-name" id="current-episode-name">-</div>
+        <div class="episode-step" id="current-episode-step">-</div>
+        <div class="step-progress">
+            <div class="progress-bar small">
+                <div class="progress-fill" id="step-progress-fill" style="width: 0%"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="processing-log" id="processing-log">
+        <!-- Log entries added here -->
+    </div>
+</section>
+
+<!-- Results Panel -->
+<section class="panel results-panel" id="results-panel" style="display: none;">
+    <div class="panel-header">
+        <h2>Results</h2>
+    </div>
+
+    <div class="results-summary" id="results-summary">
+        <!-- Filled when processing completes -->
+    </div>
+
+    <div class="results-actions">
+        <button class="btn btn-primary" id="export-to-sheets">Export to Google Sheets</button>
+        <button class="btn btn-secondary" onclick="window.location.href='/episodes'">Back to Episodes</button>
+    </div>
+
+    <div class="results-list" id="results-list">
+        <!-- Detailed results -->
+    </div>
+</section>
+
+<!-- Queue Item Template -->
+<template id="queue-item-template">
+    <div class="queue-item" data-episode-id="">
+        <div class="queue-item-info">
+            <span class="queue-item-show"></span>
+            <span class="queue-item-title"></span>
+        </div>
+        <div class="queue-item-status">
+            <span class="status-badge status-pending">Pending</span>
+        </div>
+        <button class="btn btn-small btn-link queue-item-remove" title="Remove from queue">&times;</button>
+    </div>
+</template>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let queuedEpisodes = [];
+let eventSource = null;
+let currentJobId = null;
+
+document.addEventListener('DOMContentLoaded', function() {
+    // Load episodes from URL params
+    const params = new URLSearchParams(window.location.search);
+    const episodeIds = params.get('episodes');
+
+    if (episodeIds) {
+        loadQueuedEpisodes(episodeIds.split(','));
+    }
+
+    document.getElementById('start-processing').addEventListener('click', startProcessing);
+    document.getElementById('cancel-processing').addEventListener('click', cancelProcessing);
+    document.getElementById('export-to-sheets').addEventListener('click', exportToSheets);
+});
+
+async function loadQueuedEpisodes(episodeIds) {
+    try {
+        const res = await fetch('/api/episodes?ids=' + episodeIds.join(','));
+        queuedEpisodes = await res.json();
+        renderQueue();
+    } catch (err) {
+        console.error('Failed to load episodes:', err);
+    }
+}
+
+function renderQueue() {
+    const list = document.getElementById('queue-list');
+    const count = document.getElementById('queue-count');
+    const startBtn = document.getElementById('start-processing');
+
+    count.textContent = queuedEpisodes.length;
+    startBtn.disabled = queuedEpisodes.length === 0;
+
+    if (queuedEpisodes.length === 0) {
+        list.innerHTML = `
+            <div class="empty-state">
+                <p>No episodes in queue.</p>
+                <p class="hint">Select episodes from the <a href="/episodes">Episodes</a> page to process them.</p>
+            </div>`;
+        return;
+    }
+
+    list.innerHTML = '';
+    queuedEpisodes.forEach(ep => {
+        const item = createQueueItem(ep);
+        list.appendChild(item);
+    });
+}
+
+function createQueueItem(ep) {
+    const div = document.createElement('div');
+    div.className = 'queue-item';
+    div.dataset.episodeId = ep.id;
+
+    div.innerHTML = `
+        <div class="queue-item-info">
+            <span class="queue-item-show">${escapeHtml(ep.podcast_name)}</span>
+            <span class="queue-item-title">${escapeHtml(ep.title)}</span>
+        </div>
+        <div class="queue-item-status">
+            <span class="status-badge status-pending">Pending</span>
+        </div>
+        <button class="btn btn-small btn-link queue-item-remove"
+                onclick="removeFromQueue('${ep.id}')"
+                title="Remove from queue">&times;</button>
+    `;
+
+    return div;
+}
+
+function removeFromQueue(episodeId) {
+    queuedEpisodes = queuedEpisodes.filter(ep => ep.id !== episodeId);
+    renderQueue();
+
+    // Update URL
+    const params = new URLSearchParams();
+    if (queuedEpisodes.length > 0) {
+        params.set('episodes', queuedEpisodes.map(ep => ep.id).join(','));
+    }
+    history.replaceState(null, '', '/processing' + (params.toString() ? '?' + params.toString() : ''));
+}
+
+async function startProcessing() {
+    const episodeIds = queuedEpisodes.map(ep => ep.id);
+    if (episodeIds.length === 0) return;
+
+    const force = document.getElementById('option-force').checked;
+    const retryNoTranscript = document.getElementById('option-retry-no-transcript').checked;
+
+    // Show progress panel
+    document.getElementById('progress-panel').style.display = 'block';
+    document.getElementById('start-processing').style.display = 'none';
+    document.getElementById('cancel-processing').style.display = 'inline-block';
+
+    try {
+        // Start processing job
+        const res = await fetch('/api/process', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                episode_ids: episodeIds,
+                force: force,
+                retry_no_transcript: retryNoTranscript
+            })
+        });
+
+        const data = await res.json();
+        currentJobId = data.job_id;
+
+        // Connect to SSE stream
+        connectToProgressStream(currentJobId);
+
+    } catch (err) {
+        console.error('Failed to start processing:', err);
+        addLogEntry('error', 'Failed to start processing: ' + err.message);
+    }
+}
+
+function connectToProgressStream(jobId) {
+    eventSource = new EventSource(`/api/process/stream/${jobId}`);
+
+    eventSource.onmessage = function(event) {
+        const data = JSON.parse(event.data);
+        handleProgressUpdate(data);
+    };
+
+    eventSource.onerror = function() {
+        if (eventSource.readyState === EventSource.CLOSED) {
+            console.log('SSE connection closed');
+        }
+    };
+}
+
+function handleProgressUpdate(data) {
+    switch (data.type) {
+        case 'start':
+            document.getElementById('processing-status').textContent = 'Processing...';
+            document.getElementById('overall-progress-text').textContent = `0 / ${data.total}`;
+            break;
+
+        case 'episode_start':
+            document.getElementById('current-episode-name').textContent =
+                `${data.podcast_name}: ${data.title}`;
+            document.getElementById('current-episode-step').textContent = 'Starting...';
+            updateQueueItemStatus(data.episode_id, 'in-progress');
+            addLogEntry('info', `Starting: ${data.title}`);
+            break;
+
+        case 'progress':
+            document.getElementById('current-episode-step').textContent = data.step;
+            document.getElementById('step-progress-fill').style.width = `${data.percent}%`;
+            break;
+
+        case 'episode_complete':
+            updateQueueItemStatus(data.episode_id, data.status);
+            updateOverallProgress(data.completed, data.total);
+            addLogEntry(
+                data.status === 'success' ? 'success' : 'warning',
+                `${data.status}: ${data.title}`
+            );
+            break;
+
+        case 'complete':
+            eventSource.close();
+            showResults(data.results);
+            break;
+
+        case 'error':
+            addLogEntry('error', data.message);
+            break;
+    }
+}
+
+function updateQueueItemStatus(episodeId, status) {
+    const item = document.querySelector(`.queue-item[data-episode-id="${episodeId}"]`);
+    if (!item) return;
+
+    const badge = item.querySelector('.status-badge');
+    badge.className = 'status-badge status-' + status;
+    badge.textContent = {
+        'pending': 'Pending',
+        'in-progress': 'Processing...',
+        'success': 'Done',
+        'no_transcript': 'No Transcript',
+        'error': 'Error',
+        'skipped': 'Skipped'
+    }[status] || status;
+}
+
+function updateOverallProgress(completed, total) {
+    const percent = Math.round((completed / total) * 100);
+    document.getElementById('overall-progress-fill').style.width = `${percent}%`;
+    document.getElementById('overall-progress-text').textContent = `${completed} / ${total}`;
+}
+
+function addLogEntry(type, message) {
+    const log = document.getElementById('processing-log');
+    const entry = document.createElement('div');
+    entry.className = `log-entry log-${type}`;
+    entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+    log.appendChild(entry);
+    log.scrollTop = log.scrollHeight;
+}
+
+function showResults(results) {
+    document.getElementById('processing-status').textContent = 'Complete';
+    document.getElementById('cancel-processing').style.display = 'none';
+
+    const panel = document.getElementById('results-panel');
+    panel.style.display = 'block';
+
+    const summary = document.getElementById('results-summary');
+    const success = results.filter(r => r.status === 'success').length;
+    const noTranscript = results.filter(r => r.status === 'no_transcript').length;
+    const errors = results.filter(r => r.status === 'error').length;
+    const skipped = results.filter(r => r.status === 'skipped').length;
+
+    summary.innerHTML = `
+        <div class="results-stats">
+            <div class="stat stat-success">
+                <span class="stat-value">${success}</span>
+                <span class="stat-label">Summarized</span>
+            </div>
+            <div class="stat stat-warning">
+                <span class="stat-value">${noTranscript}</span>
+                <span class="stat-label">No Transcript</span>
+            </div>
+            <div class="stat stat-info">
+                <span class="stat-value">${skipped}</span>
+                <span class="stat-label">Skipped</span>
+            </div>
+            <div class="stat stat-error">
+                <span class="stat-value">${errors}</span>
+                <span class="stat-label">Errors</span>
+            </div>
+        </div>
+    `;
+
+    const list = document.getElementById('results-list');
+    list.innerHTML = results.map(r => `
+        <div class="result-item result-${r.status}">
+            <span class="result-title">${escapeHtml(r.title)}</span>
+            <span class="result-status">${r.status}</span>
+            ${r.output_file ? `<a href="#" class="result-link">View Summary</a>` : ''}
+        </div>
+    `).join('');
+}
+
+function cancelProcessing() {
+    if (eventSource) {
+        eventSource.close();
+    }
+
+    if (currentJobId) {
+        fetch(`/api/process/${currentJobId}/cancel`, {method: 'POST'});
+    }
+
+    document.getElementById('processing-status').textContent = 'Cancelled';
+    document.getElementById('cancel-processing').style.display = 'none';
+    document.getElementById('start-processing').style.display = 'inline-block';
+}
+
+async function exportToSheets() {
+    const btn = document.getElementById('export-to-sheets');
+    btn.disabled = true;
+    btn.textContent = 'Exporting...';
+
+    try {
+        const res = await fetch('/api/export/sheets', {method: 'POST'});
+        const data = await res.json();
+
+        btn.textContent = `Exported ${data.exported} episodes`;
+        setTimeout(() => {
+            btn.textContent = 'Export to Google Sheets';
+            btn.disabled = false;
+        }, 3000);
+    } catch (err) {
+        btn.textContent = 'Export Failed';
+        btn.disabled = false;
+    }
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+</script>
+{% endblock %}

@@ -518,10 +518,156 @@ def _summarize_chunked(
     )
 
 
+# --- Standalone YouTube Video Summarization ---
+
+def summarize_youtube_video(
+    video: 'YouTubeVideo',
+    transcript_text: str,
+    model: Optional[str] = None,
+    rate_limit: bool = True,
+) -> PodcastSummary:
+    """
+    Summarize a standalone YouTube video (not tied to Apple Podcasts).
+
+    Args:
+        video: YouTubeVideo object with video metadata
+        transcript_text: Full transcript text
+        model: Model alias (e.g., 'sonnet', 'haiku'). Defaults to DEFAULT_MODEL.
+        rate_limit: Whether to apply rate limiting (default True)
+
+    Returns:
+        PodcastSummary object
+    """
+    from .youtube import YouTubeVideo  # Import here to avoid circular import
+
+    model = model or DEFAULT_MODEL
+
+    # Validate model
+    get_model_info(model)  # Raises if invalid
+
+    # Set rate limiting
+    set_rate_limiting(rate_limit)
+
+    # Check if transcript needs chunking
+    chunks = chunk_transcript(transcript_text)
+
+    if len(chunks) == 1:
+        return _summarize_youtube_single(video, transcript_text, model)
+    else:
+        return _summarize_youtube_chunked(video, chunks, model)
+
+
+def _summarize_youtube_single(
+    video: 'YouTubeVideo',
+    text: str,
+    model: str,
+) -> PodcastSummary:
+    """Summarize a single transcript chunk for a YouTube video."""
+    from .youtube import YouTubeVideo  # Import here to avoid circular import
+
+    prompt = EXTRACTION_PROMPT.format(
+        podcast_name=video.channel,  # Use channel as "podcast"
+        episode_title=video.title,
+        host=video.channel,
+        duration=video.duration_formatted,
+        transcript=text,
+    )
+
+    # Apply rate limiting based on estimated tokens
+    estimated_tokens = _estimate_tokens(prompt)
+    _apply_rate_limit(estimated_tokens)
+
+    # Call LLM
+    response_text = _call_llm(prompt, model)
+
+    # Clean up response if needed (sometimes has markdown code blocks)
+    if response_text.startswith("```"):
+        response_text = response_text.split("```")[1]
+        if response_text.startswith("json"):
+            response_text = response_text[4:]
+    response_text = response_text.strip()
+
+    data = json.loads(response_text)
+
+    return PodcastSummary(
+        tldr=data.get("tldr", ""),
+        who_should_listen=data.get("who_should_listen", ""),
+        key_insights=data.get("key_insights", []),
+        frameworks=data.get("frameworks", []),
+        soundbites=data.get("soundbites", []),
+        takeaways=data.get("takeaways", []),
+        references=data.get("references", {"books": [], "people": [], "tools": [], "links": []}),
+        categories=data.get("categories", []),
+        guests=data.get("guests", []),
+    )
+
+
+def _summarize_youtube_chunked(
+    video: 'YouTubeVideo',
+    chunks: list[str],
+    model: str,
+) -> PodcastSummary:
+    """Summarize multiple chunks and synthesize for a YouTube video."""
+    from .youtube import YouTubeVideo  # Import here to avoid circular import
+
+    # Summarize each chunk
+    chunk_summaries = []
+    for i, chunk in enumerate(chunks):
+        prompt = EXTRACTION_PROMPT.format(
+            podcast_name=video.channel,
+            episode_title=f"{video.title} (Part {i+1}/{len(chunks)})",
+            host=video.channel,
+            duration=video.duration_formatted,
+            transcript=chunk,
+        )
+
+        # Apply rate limiting for each chunk
+        estimated_tokens = _estimate_tokens(prompt)
+        _apply_rate_limit(estimated_tokens)
+
+        # Call LLM
+        response_text = _call_llm(prompt, model)
+        chunk_summaries.append(f"=== Part {i+1} ===\n{response_text}")
+
+    # Synthesize
+    synthesis_prompt = SYNTHESIS_PROMPT.format(
+        podcast_name=video.channel,
+        episode_title=video.title,
+        chunk_summaries="\n\n".join(chunk_summaries),
+    )
+
+    # Apply rate limiting for synthesis
+    estimated_tokens = _estimate_tokens(synthesis_prompt)
+    _apply_rate_limit(estimated_tokens)
+
+    # Call LLM for synthesis
+    response_text = _call_llm(synthesis_prompt, model)
+
+    if response_text.startswith("```"):
+        response_text = response_text.split("```")[1]
+        if response_text.startswith("json"):
+            response_text = response_text[4:]
+    response_text = response_text.strip()
+
+    data = json.loads(response_text)
+
+    return PodcastSummary(
+        tldr=data.get("tldr", ""),
+        who_should_listen=data.get("who_should_listen", ""),
+        key_insights=data.get("key_insights", []),
+        frameworks=data.get("frameworks", []),
+        soundbites=data.get("soundbites", []),
+        takeaways=data.get("takeaways", []),
+        references=data.get("references", {"books": [], "people": [], "tools": [], "links": []}),
+        categories=data.get("categories", []),
+        guests=data.get("guests", []),
+    )
+
+
 if __name__ == "__main__":
     # Test with a cached transcript
     from .podcast_db import get_episodes_since
-    from .youtube import Transcript, CACHE_DIR
+    from .youtube import Transcript, get_cache_dir
 
     print("Testing summarization...")
 
@@ -533,7 +679,7 @@ if __name__ == "__main__":
         exit(1)
 
     # Find a cached transcript
-    cache_files = list(CACHE_DIR.glob("*.json"))
+    cache_files = list(get_cache_dir().glob("*.json"))
     if not cache_files:
         print("No cached transcripts found. Run --fetch-transcripts first.")
         exit(1)

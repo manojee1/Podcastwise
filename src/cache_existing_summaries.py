@@ -11,7 +11,7 @@ from pathlib import Path
 from rich.console import Console
 
 from .state import get_state_manager
-from .sheets import SUMMARY_CACHE_DIR, cache_summary
+from .sheets import get_summary_cache_dir, cache_summary
 from .summarizer import PodcastSummary
 
 
@@ -175,7 +175,8 @@ def cache_existing_summaries() -> dict:
     console.print(f"[cyan]Found {len(processed)} processed episodes in state[/cyan]")
 
     # Ensure cache directory exists
-    SUMMARY_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    summary_cache_dir = get_summary_cache_dir()
+    summary_cache_dir.mkdir(parents=True, exist_ok=True)
 
     cached = 0
     skipped = 0
@@ -183,7 +184,7 @@ def cache_existing_summaries() -> dict:
 
     for proc_ep in processed:
         # Check if already cached
-        cache_file = SUMMARY_CACHE_DIR / f"{proc_ep.episode_id}.json"
+        cache_file = summary_cache_dir / f"{proc_ep.episode_id}.json"
         if cache_file.exists():
             skipped += 1
             continue

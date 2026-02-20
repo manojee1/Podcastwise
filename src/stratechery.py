@@ -17,11 +17,12 @@ import requests
 from bs4 import BeautifulSoup
 
 from .podcast_db import Episode
-from .youtube import Transcript, CACHE_DIR
+from .youtube import Transcript, get_cache_dir
 
 
-# Cookie file for Stratechery authentication
-STRATECHERY_COOKIE_FILE = CACHE_DIR / "stratechery_cookies.txt"
+def get_stratechery_cookie_file():
+    """Get Stratechery cookie file path, evaluated at runtime."""
+    return get_cache_dir() / "stratechery_cookies.txt"
 
 # Default browser for cookie extraction
 DEFAULT_BROWSER = "chrome"
@@ -46,13 +47,15 @@ def extract_stratechery_cookies(browser: str = None) -> Path:
         Path to the cookie file
     """
     browser = browser or DEFAULT_BROWSER
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache_dir = get_cache_dir()
+    cookie_file = get_stratechery_cookie_file()
+    cache_dir.mkdir(parents=True, exist_ok=True)
 
     # Use yt-dlp to extract cookies for stratechery.com
     cmd = [
         "yt-dlp",
         "--cookies-from-browser", browser,
-        "--cookies", str(STRATECHERY_COOKIE_FILE),
+        "--cookies", str(cookie_file),
         "--skip-download",
         "https://stratechery.com",
     ]
@@ -83,15 +86,15 @@ def extract_stratechery_cookies(browser: str = None) -> Path:
     except FileNotFoundError:
         raise RuntimeError("yt-dlp not found. Install with: pip install yt-dlp")
 
-    if not STRATECHERY_COOKIE_FILE.exists():
-        raise RuntimeError(f"Cookie file not created at {STRATECHERY_COOKIE_FILE}")
+    if not cookie_file.exists():
+        raise RuntimeError(f"Cookie file not created at {cookie_file}")
 
-    return STRATECHERY_COOKIE_FILE
+    return cookie_file
 
 
 def has_stratechery_cookies() -> bool:
     """Check if Stratechery cookie file exists."""
-    return STRATECHERY_COOKIE_FILE.exists()
+    return get_stratechery_cookie_file().exists()
 
 
 def load_stratechery_session() -> Optional[requests.Session]:
@@ -101,7 +104,8 @@ def load_stratechery_session() -> Optional[requests.Session]:
     Returns:
         requests.Session with cookies loaded, or None if no cookies available
     """
-    if not STRATECHERY_COOKIE_FILE.exists():
+    cookie_file = get_stratechery_cookie_file()
+    if not cookie_file.exists():
         return None
 
     session = requests.Session()
@@ -110,7 +114,7 @@ def load_stratechery_session() -> Optional[requests.Session]:
     })
 
     # Load Netscape format cookies
-    cookie_jar = http.cookiejar.MozillaCookieJar(str(STRATECHERY_COOKIE_FILE))
+    cookie_jar = http.cookiejar.MozillaCookieJar(str(cookie_file))
     try:
         cookie_jar.load(ignore_discard=True, ignore_expires=True)
         session.cookies.update(cookie_jar)
@@ -142,6 +146,46 @@ def title_similarity(title1: str, title2: str) -> float:
     norm1 = normalize_title(title1)
     norm2 = normalize_title(title2)
     return SequenceMatcher(None, norm1, norm2).ratio()
+
+
+# Words that are structural/template, not content-distinguishing
+_TEMPLATE_WORDS = frozenset({
+    'an', 'a', 'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+    'of', 'with', 'by', 'is', 'it', 'as', 'from', 'into', 'about', 'over',
+    'interview', 'co', 'founder', 'ceo', 'chief', 'executive', 'officer',
+    'president', 'head', 'director', 'vice', 'senior', 'former', 'new',
+    'earnings', 'update', 'notes', 'thoughts', 'additional', 'quick',
+    'ben', 'thompson', 'stratechery', 'daily', 'email', 'podcast',
+    'its', 'their', 'our', 'your', 'his', 'her', 'how', 'why', 'what',
+    'when', 'where', 'who', 'which', 'that', 'this', 'these', 'those',
+})
+
+
+def extract_content_words(title: str) -> set[str]:
+    """
+    Extract content (non-template) words from a title.
+
+    These are the distinguishing words — guest names, company names, topics —
+    that differ between similar-looking titles like
+    "An Interview with Anduril CEO Brian Schimpf" vs
+    "An Interview with Cursor CEO Michael Truell".
+    """
+    words = re.findall(r'\b[a-zA-Z]\w*\b', title.lower())
+    return {w for w in words if w not in _TEMPLATE_WORDS and len(w) > 2}
+
+
+def content_word_overlap(title1: str, title2: str) -> float:
+    """
+    Return the fraction of content words in title1 that appear in title2.
+
+    Returns 1.0 if title1 has no content words (no penalty for generic titles).
+    """
+    words1 = extract_content_words(title1)
+    if not words1:
+        return 1.0
+    words2 = extract_content_words(title2)
+    overlap = words1 & words2
+    return len(overlap) / len(words1)
 
 
 def search_stratechery_posts(session: requests.Session, max_pages: int = 3) -> list[dict]:
@@ -195,14 +239,30 @@ def search_stratechery_posts(session: requests.Session, max_pages: int = 3) -> l
     return posts
 
 
-def find_matching_post(episode: Episode, posts: list[dict], min_similarity: float = 0.4) -> Optional[dict]:
+def find_matching_post(
+    episode: Episode,
+    posts: list[dict],
+    min_similarity: float = 0.4,
+    min_content_overlap: float = 0.3,
+) -> Optional[dict]:
     """
     Find the best matching blog post for an episode.
+
+    Uses two criteria:
+    1. Overall title similarity (SequenceMatcher ratio) >= min_similarity
+    2. Content word overlap (guest names, company names, topics) >= min_content_overlap
+
+    The content-word gate prevents false matches between structurally similar titles
+    like "An Interview with Anduril CEO Brian Schimpf" vs
+    "An Interview with Cursor CEO Michael Truell" — they score ~0.7 on similarity
+    alone but near 0.0 on content-word overlap.
 
     Args:
         episode: Episode to match
         posts: List of posts with 'title' and 'url'
-        min_similarity: Minimum similarity score to consider a match
+        min_similarity: Minimum SequenceMatcher ratio to consider a match
+        min_content_overlap: Minimum fraction of episode content words that must
+                             appear in the article title (0.0 disables the gate)
 
     Returns:
         Best matching post dict, or None if no good match found
@@ -214,15 +274,25 @@ def find_matching_post(episode: Episode, posts: list[dict], min_similarity: floa
     best_score = 0.0
 
     for post in posts:
-        score = title_similarity(episode.title, post['title'])
+        sim = title_similarity(episode.title, post['title'])
+
+        # Gate 1: minimum overall similarity
+        if sim < min_similarity:
+            continue
+
+        # Gate 2: content-word overlap — prevents template-driven false matches
+        overlap = content_word_overlap(episode.title, post['title'])
+        if overlap < min_content_overlap:
+            continue
+
+        # Combined score: weight similarity more than overlap
+        score = sim * 0.7 + overlap * 0.3
+
         if score > best_score:
             best_score = score
             best_match = post
 
-    if best_score >= min_similarity:
-        return best_match
-
-    return None
+    return best_match
 
 
 def extract_article_text(session: requests.Session, url: str) -> Optional[str]:
@@ -287,6 +357,11 @@ def extract_article_text(session: requests.Session, url: str) -> Optional[str]:
     return '\n\n'.join(paragraphs)
 
 
+# Module-level cache: avoid fetching 20 archive pages per episode in a batch run.
+# Valid for the lifetime of the process (archive doesn't change mid-run).
+_cached_posts: Optional[list[dict]] = None
+
+
 def fetch_stratechery_transcript(episode: Episode) -> Optional[Transcript]:
     """
     Fetch transcript from Stratechery blog post.
@@ -297,12 +372,20 @@ def fetch_stratechery_transcript(episode: Episode) -> Optional[Transcript]:
     Returns:
         Transcript object or None if not found/failed
     """
+    global _cached_posts
+
     session = load_stratechery_session()
     if not session:
         return None
 
-    # Search for matching posts (use more pages to find older episodes)
-    posts = search_stratechery_posts(session, max_pages=15)
+    # Reuse the cached archive list within a single process run to avoid
+    # re-fetching 20 pages for every episode in a batch.
+    if _cached_posts is None:
+        # Search for matching posts (use more pages to find older episodes)
+        # 20 pages covers ~440 posts, reaching back to early 2025
+        _cached_posts = search_stratechery_posts(session, max_pages=20)
+
+    posts = _cached_posts
     if not posts:
         return None
 

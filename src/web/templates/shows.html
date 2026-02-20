@@ -1,0 +1,262 @@
+{% extends "base.html" %}
+
+{% block title %}Shows - Podcastwise{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Podcast Shows</h1>
+    <p class="subtitle">Follow shows to fetch new episodes from their RSS feeds</p>
+</div>
+
+<div class="shows-layout">
+    <!-- Followed Shows Panel -->
+    <section class="panel followed-shows">
+        <div class="panel-header">
+            <h2>Followed Shows</h2>
+            <span class="badge" id="followed-count">0</span>
+        </div>
+
+        <div class="panel-actions">
+            <button class="btn btn-primary" id="sync-all-rss" title="Fetch new episodes from all followed shows">
+                Sync All RSS Feeds
+            </button>
+        </div>
+
+        <div class="show-list" id="followed-list">
+            <!-- Populated by JavaScript -->
+            <div class="empty-state">
+                <p>No shows followed yet.</p>
+                <p class="hint">Select shows from your listening history to follow them.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Available Shows Panel -->
+    <section class="panel available-shows">
+        <div class="panel-header">
+            <h2>From Listening History</h2>
+            <span class="badge" id="available-count">0</span>
+        </div>
+
+        <div class="panel-actions">
+            <input type="text"
+                   class="search-input"
+                   id="show-search"
+                   placeholder="Search shows...">
+        </div>
+
+        <div class="show-list" id="available-list">
+            <!-- Populated by JavaScript -->
+            <div class="loading">Loading shows from Apple Podcasts...</div>
+        </div>
+    </section>
+</div>
+
+<!-- Show Card Template (hidden) -->
+<template id="show-card-template">
+    <div class="show-card" data-show-name="">
+        <div class="show-info">
+            <h3 class="show-name"></h3>
+            <div class="show-meta">
+                <span class="episode-count"></span>
+                <span class="last-sync"></span>
+            </div>
+        </div>
+        <div class="show-actions">
+            <button class="btn btn-small btn-follow">Follow</button>
+            <button class="btn btn-small btn-unfollow btn-danger">Unfollow</button>
+            <button class="btn btn-small btn-sync" title="Sync RSS feed">Sync</button>
+        </div>
+    </div>
+</template>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    loadShows();
+
+    document.getElementById('show-search').addEventListener('input', filterShows);
+    document.getElementById('sync-all-rss').addEventListener('click', syncAllFeeds);
+});
+
+async function loadShows() {
+    try {
+        // Load available shows from Apple Podcasts history
+        const availableRes = await fetch('/api/shows');
+        const available = await availableRes.json();
+
+        // Load followed shows
+        const followedRes = await fetch('/api/shows/followed');
+        const followed = await followedRes.json();
+
+        renderAvailableShows(available, followed);
+        renderFollowedShows(followed);
+    } catch (err) {
+        console.error('Failed to load shows:', err);
+    }
+}
+
+function renderAvailableShows(shows, followed) {
+    const list = document.getElementById('available-list');
+    const followedNames = new Set(followed.map(s => s.podcast_name));
+
+    list.innerHTML = '';
+    document.getElementById('available-count').textContent = shows.length;
+
+    shows.forEach(show => {
+        const card = createShowCard(show, followedNames.has(show.podcast_name));
+        list.appendChild(card);
+    });
+}
+
+function renderFollowedShows(shows) {
+    const list = document.getElementById('followed-list');
+    document.getElementById('followed-count').textContent = shows.length;
+
+    if (shows.length === 0) {
+        list.innerHTML = `
+            <div class="empty-state">
+                <p>No shows followed yet.</p>
+                <p class="hint">Select shows from your listening history to follow them.</p>
+            </div>`;
+        return;
+    }
+
+    list.innerHTML = '';
+    shows.forEach(show => {
+        const card = createFollowedCard(show);
+        list.appendChild(card);
+    });
+}
+
+function createShowCard(show, isFollowed) {
+    const div = document.createElement('div');
+    div.className = 'show-card' + (isFollowed ? ' is-followed' : '');
+    div.dataset.showName = show.podcast_name.toLowerCase();
+
+    div.innerHTML = `
+        <div class="show-info">
+            <h3 class="show-name">${escapeHtml(show.podcast_name)}</h3>
+            <div class="show-meta">
+                <span class="episode-count">${show.episode_count} episodes listened</span>
+            </div>
+        </div>
+        <div class="show-actions">
+            <button class="btn btn-small ${isFollowed ? 'btn-disabled' : 'btn-follow'}"
+                    ${isFollowed ? 'disabled' : ''}
+                    onclick="followShow('${escapeHtml(show.podcast_name)}', '${escapeHtml(show.feed_url || '')}')">
+                ${isFollowed ? 'Following' : 'Follow'}
+            </button>
+        </div>
+    `;
+    return div;
+}
+
+function createFollowedCard(show) {
+    const div = document.createElement('div');
+    div.className = 'show-card followed';
+    div.dataset.showName = show.podcast_name.toLowerCase();
+
+    const lastSync = show.last_rss_fetch
+        ? `Last sync: ${new Date(show.last_rss_fetch).toLocaleDateString()}`
+        : 'Never synced';
+
+    div.innerHTML = `
+        <div class="show-info">
+            <h3 class="show-name">${escapeHtml(show.podcast_name)}</h3>
+            <div class="show-meta">
+                <span class="rss-count">${show.rss_episode_count || 0} RSS episodes</span>
+                <span class="last-sync">${lastSync}</span>
+            </div>
+        </div>
+        <div class="show-actions">
+            <button class="btn btn-small btn-sync" onclick="syncFeed(${show.id})">Sync</button>
+            <button class="btn btn-small btn-danger" onclick="unfollowShow(${show.id})">Unfollow</button>
+        </div>
+    `;
+    return div;
+}
+
+async function followShow(name, feedUrl) {
+    try {
+        const res = await fetch('/api/shows/followed', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({podcast_name: name, feed_url: feedUrl})
+        });
+        if (res.ok) {
+            loadShows();
+        }
+    } catch (err) {
+        console.error('Failed to follow show:', err);
+    }
+}
+
+async function unfollowShow(showId) {
+    if (!confirm('Unfollow this show? RSS episodes will be removed.')) return;
+
+    try {
+        const res = await fetch(`/api/shows/followed/${showId}`, {method: 'DELETE'});
+        if (res.ok) {
+            loadShows();
+        }
+    } catch (err) {
+        console.error('Failed to unfollow show:', err);
+    }
+}
+
+async function syncFeed(showId) {
+    const btn = event.target;
+    btn.disabled = true;
+    btn.textContent = 'Syncing...';
+
+    try {
+        const res = await fetch(`/api/shows/${showId}/fetch-rss`, {method: 'POST'});
+        const data = await res.json();
+        btn.textContent = `+${data.new_episodes || 0}`;
+        setTimeout(() => {
+            btn.textContent = 'Sync';
+            btn.disabled = false;
+            loadShows();
+        }, 2000);
+    } catch (err) {
+        btn.textContent = 'Error';
+        btn.disabled = false;
+    }
+}
+
+async function syncAllFeeds() {
+    const btn = document.getElementById('sync-all-rss');
+    btn.disabled = true;
+    btn.textContent = 'Syncing all...';
+
+    try {
+        const res = await fetch('/api/shows/sync-all', {method: 'POST'});
+        const data = await res.json();
+        btn.textContent = `Done! +${data.total_new || 0} episodes`;
+        setTimeout(() => {
+            btn.textContent = 'Sync All RSS Feeds';
+            btn.disabled = false;
+            loadShows();
+        }, 3000);
+    } catch (err) {
+        btn.textContent = 'Error';
+        btn.disabled = false;
+    }
+}
+
+function filterShows() {
+    const query = document.getElementById('show-search').value.toLowerCase();
+    document.querySelectorAll('#available-list .show-card').forEach(card => {
+        card.style.display = card.dataset.showName.includes(query) ? '' : 'none';
+    });
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+</script>
+{% endblock %}

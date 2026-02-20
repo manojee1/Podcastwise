@@ -24,8 +24,10 @@ load_dotenv()
 
 console = Console()
 
-# Summary cache location (alongside transcripts)
-SUMMARY_CACHE_DIR = Path.home() / "Documents/PodcastNotes/.cache/summaries"
+def get_summary_cache_dir() -> Path:
+    """Get summary cache directory, evaluated at runtime."""
+    base = Path(os.getenv("PODCASTWISE_OUTPUT_DIR", "~/Documents/PodcastNotes")).expanduser()
+    return base / ".cache/summaries"
 
 
 def get_sheets_client():
@@ -87,9 +89,10 @@ def cache_summary(episode_id: int, summary: PodcastSummary) -> Path:
     Returns:
         Path to cached file
     """
-    SUMMARY_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache_dir = get_summary_cache_dir()
+    cache_dir.mkdir(parents=True, exist_ok=True)
 
-    cache_file = SUMMARY_CACHE_DIR / f"{episode_id}.json"
+    cache_file = cache_dir / f"{episode_id}.json"
 
     with open(cache_file, 'w') as f:
         json.dump(summary.to_dict(), f, indent=2)
@@ -131,7 +134,7 @@ def load_cached_summary(episode_id: int) -> Optional[PodcastSummary]:
     Returns:
         PodcastSummary object or None if not cached
     """
-    cache_file = SUMMARY_CACHE_DIR / f"{episode_id}.json"
+    cache_file = get_summary_cache_dir() / f"{episode_id}.json"
 
     if not cache_file.exists():
         return None
@@ -162,7 +165,7 @@ def load_cached_summary(episode_id: int) -> Optional[PodcastSummary]:
 
 def is_summary_cached(episode_id: int) -> bool:
     """Check if a summary is cached."""
-    return (SUMMARY_CACHE_DIR / f"{episode_id}.json").exists()
+    return (get_summary_cache_dir() / f"{episode_id}.json").exists()
 
 
 # --- Category Mapping ---
@@ -196,7 +199,7 @@ CATEGORY_MAP = {
     "finance": "Finance/Economics/Investing",
     "economics": "Finance/Economics/Investing",
     "investing": "Finance/Economics/Investing",
-    "business": "Finance/Economics/Investing",
+    "business": "Tech",
     # Health
     "health": "Health",
     # Humor (maps to Entertainment)
@@ -375,7 +378,7 @@ def get_or_create_year_tab(spreadsheet, year: int):
     Returns:
         Worksheet for the year
     """
-    tab_name = "Summary"
+    tab_name = os.getenv("GOOGLE_SHEETS_TAB_NAME", "Summary")
 
     # Try to get existing tab
     try:
@@ -706,6 +709,139 @@ def sync_export_state() -> dict:
             synced += 1
 
     return {"synced": synced, "total_in_sheet": len(all_titles_in_sheet)}
+
+
+# --- Standalone YouTube Video Export ---
+
+def cache_summary_for_youtube(video_id: str, summary: PodcastSummary) -> Path:
+    """
+    Cache a summary for a standalone YouTube video.
+
+    Uses video_id as the key (prefixed with 'yt_' to distinguish from episode IDs).
+
+    Args:
+        video_id: YouTube video ID
+        summary: PodcastSummary object
+
+    Returns:
+        Path to cached file
+    """
+    cache_dir = get_summary_cache_dir()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    cache_file = cache_dir / f"yt_{video_id}.json"
+
+    with open(cache_file, 'w') as f:
+        json.dump(summary.to_dict(), f, indent=2)
+
+    return cache_file
+
+
+def format_row_for_youtube(video: 'YouTubeVideo', summary: PodcastSummary) -> list:
+    """
+    Format a YouTube video summary into a row for Google Sheets.
+
+    Columns match the existing format:
+    1. Podcast Name (channel)
+    2. Episode Title (video title)
+    3. Date Listened (today)
+    4. Duration
+    5. Date Created (upload date)
+    6. Guests
+    7. TL;DR
+    8. Category (single)
+    9. Key Insights
+    10. Frameworks
+    11. Soundbites (top 3)
+
+    Args:
+        video: YouTubeVideo object
+        summary: PodcastSummary object
+
+    Returns:
+        List of cell values for the row
+    """
+    from .youtube import YouTubeVideo  # Import here to avoid circular import
+
+    # Format date listened (today)
+    date_listened_str = datetime.now().strftime("%Y-%m-%d")
+
+    # Format date created (upload date)
+    date_created_str = video.upload_date.strftime("%Y-%m-%d") if video.upload_date else ""
+
+    # Format guests as comma-separated string
+    guests_str = ", ".join(summary.guests) if summary.guests else ""
+
+    # Map to single category
+    category = map_category(summary.categories)
+
+    # Format key insights as bullet list
+    insights = "\n".join(f"• {insight}" for insight in summary.key_insights) if summary.key_insights else ""
+
+    # Format frameworks as bullet list
+    frameworks = "\n".join(
+        f"• {fw.get('name', '')}: {fw.get('description', '')}"
+        for fw in summary.frameworks[:5]  # Limit to 5
+    ) if summary.frameworks else ""
+
+    # Format soundbites as bullet list (top 3, full quotes)
+    soundbites = "\n".join(
+        f'• "{sb.get("quote", "")}" —{sb.get("speaker", "Unknown")}'
+        for sb in summary.soundbites[:3]
+    ) if summary.soundbites else ""
+
+    return [
+        video.channel,        # Podcast Name (use channel)
+        video.title,          # Episode Title
+        date_listened_str,    # Date Listened
+        video.duration_formatted,  # Duration
+        date_created_str,     # Date Created
+        guests_str,           # Guests
+        summary.tldr or "",   # TL;DR
+        category,             # Category
+        insights,             # Key Insights
+        frameworks,           # Frameworks
+        soundbites,           # Soundbites
+    ]
+
+
+def export_youtube_to_sheets(video: 'YouTubeVideo', summary: PodcastSummary) -> dict:
+    """
+    Export a single YouTube video summary to Google Sheets.
+
+    Args:
+        video: YouTubeVideo object
+        summary: PodcastSummary object
+
+    Returns:
+        Dict with export result: {"exported": bool, "reason"?: str, "error"?: str}
+    """
+    from .youtube import YouTubeVideo  # Import here to avoid circular import
+
+    console.print("[cyan]Exporting to Google Sheets...[/cyan]")
+
+    try:
+        client = get_sheets_client()
+        sheet_id = get_sheet_id()
+        spreadsheet = client.open_by_key(sheet_id)
+    except Exception as e:
+        return {"exported": False, "error": str(e)}
+
+    # Get or create Summary worksheet
+    worksheet = get_or_create_year_tab(spreadsheet, datetime.now().year)
+
+    # Check for duplicate by title
+    existing_titles = get_existing_episode_ids(worksheet)
+    if video.title in existing_titles:
+        return {"exported": False, "reason": "already exists"}
+
+    # Format and append row
+    row = format_row_for_youtube(video, summary)
+    try:
+        worksheet.append_row(row, value_input_option="RAW")
+        return {"exported": True}
+    except Exception as e:
+        return {"exported": False, "error": str(e)}
 
 
 if __name__ == "__main__":

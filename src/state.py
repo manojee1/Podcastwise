@@ -5,15 +5,22 @@ Keeps track of which episodes have been summarized to avoid re-processing.
 """
 
 import json
+import os
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 
-# State file location
-STATE_DIR = Path.home() / "Documents/PodcastNotes/.state"
-STATE_FILE = STATE_DIR / "processed.json"
+def get_state_dir() -> Path:
+    """Get state directory, evaluated at runtime."""
+    base = Path(os.getenv("PODCASTWISE_OUTPUT_DIR", "~/Documents/PodcastNotes")).expanduser()
+    return base / ".state"
+
+
+def get_state_file() -> Path:
+    """Get state file path, evaluated at runtime."""
+    return get_state_dir() / "processed.json"
 
 
 @dataclass
@@ -32,8 +39,8 @@ class ProcessedEpisode:
 class StateManager:
     """Manages state of processed episodes."""
 
-    def __init__(self, state_file: Path = STATE_FILE):
-        self.state_file = state_file
+    def __init__(self, state_file: Optional[Path] = None):
+        self.state_file = state_file if state_file is not None else get_state_file()
         self._state: dict[int, ProcessedEpisode] = {}
         self._load()
 
@@ -133,6 +140,12 @@ class StateManager:
             self._state[episode_id].exported_to_sheets = True
             self._save()
 
+    def mark_not_exported(self, episode_id: int) -> None:
+        """Reset export flag so the episode will be re-exported on next export run."""
+        if episode_id in self._state:
+            self._state[episode_id].exported_to_sheets = False
+            self._save()
+
     def is_exported(self, episode_id: int) -> bool:
         """Check if episode has been exported to Google Sheets."""
         if episode_id in self._state:
@@ -163,11 +176,31 @@ class StateManager:
 
 # Global state manager instance
 _state_manager: Optional[StateManager] = None
+_state_manager_path: Optional[Path] = None
 
 
 def get_state_manager() -> StateManager:
-    """Get the global state manager instance."""
-    global _state_manager
+    """Get the global state manager instance.
+
+    Creates a new instance if the state file path has changed (e.g., due to
+    PODCASTWISE_OUTPUT_DIR environment variable being set).
+    """
+    global _state_manager, _state_manager_path
+    current_path = get_state_file()
+
+    # Reset if path changed (environment variable was set after import)
+    if _state_manager is not None and _state_manager_path != current_path:
+        _state_manager = None
+
     if _state_manager is None:
         _state_manager = StateManager()
+        _state_manager_path = current_path
+
     return _state_manager
+
+
+def reset_state_manager() -> None:
+    """Reset the global state manager (for testing or when env changes)."""
+    global _state_manager, _state_manager_path
+    _state_manager = None
+    _state_manager_path = None

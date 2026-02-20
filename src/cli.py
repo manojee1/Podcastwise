@@ -24,10 +24,10 @@ from .state import get_state_manager
 from .sheets import export_to_sheets, cleanup_all_sheets, sync_export_state
 from .summarizer import get_available_models, DEFAULT_MODEL, MODEL_CONFIG
 from .youtube import (
-    extract_cookies, has_cookies, set_cookie_file, DEFAULT_BROWSER, COOKIE_FILE,
+    extract_cookies, has_cookies, set_cookie_file, DEFAULT_BROWSER,
     load_not_found, clear_not_found_matching, get_not_found_count
 )
-from .stratechery import extract_stratechery_cookies, has_stratechery_cookies
+from .stratechery import extract_stratechery_cookies, has_stratechery_cookies, is_stratechery
 
 
 def parse_date(date_str: str) -> datetime:
@@ -292,6 +292,142 @@ def cmd_sync_export_state(args):
         console.print(f"[dim]Total titles in sheet:[/dim] {result['total_in_sheet']}")
 
 
+def cmd_youtube(args):
+    """Summarize a standalone YouTube video (no Apple Podcasts required)."""
+    from .youtube import fetch_transcript_for_url, extract_video_id
+    from .summarizer import summarize_youtube_video, DEFAULT_MODEL
+    from .markdown import write_youtube_summary
+    from .sheets import export_youtube_to_sheets, cache_summary_for_youtube
+
+    url = args.youtube
+
+    # Validate URL format
+    if not extract_video_id(url):
+        console.print(f"[red]Error: Invalid YouTube URL format: {url}[/red]")
+        console.print("[dim]Supported formats:[/dim]")
+        console.print("[dim]  - https://www.youtube.com/watch?v=VIDEO_ID[/dim]")
+        console.print("[dim]  - https://youtu.be/VIDEO_ID[/dim]")
+        return
+
+    console.print(f"\n[bold]YouTube Video Summarizer[/bold]")
+    console.print(f"[cyan]Fetching video metadata...[/cyan]")
+
+    result = fetch_transcript_for_url(url)
+    if not result:
+        console.print("[red]No transcript available for this video[/red]")
+        console.print("[dim]The video may not have captions enabled or they may be auto-generated.[/dim]")
+        return
+
+    video, transcript_text, segments = result
+    console.print(f"[green]Found:[/green] {video.title}")
+    console.print(f"[dim]Channel: {video.channel} | Duration: {video.duration_formatted}[/dim]")
+    console.print(f"[dim]Transcript: {len(transcript_text):,} characters[/dim]")
+
+    # Get model to use
+    model = args.model or DEFAULT_MODEL
+    console.print(f"\n[cyan]Generating summary with {model}...[/cyan]")
+
+    try:
+        summary = summarize_youtube_video(
+            video,
+            transcript_text,
+            model=model,
+            rate_limit=not args.no_rate_limit,
+        )
+    except Exception as e:
+        console.print(f"[red]Error generating summary: {e}[/red]")
+        return
+
+    # Cache summary
+    cache_summary_for_youtube(video.video_id, summary)
+    console.print(f"[dim]Summary cached[/dim]")
+
+    # Write markdown
+    output_file = write_youtube_summary(video, summary, transcript_text)
+    console.print(f"[green]✓ Summary saved to:[/green] {output_file}")
+
+    # Export to Google Sheets if --auto-sync
+    if args.auto_sync:
+        result = export_youtube_to_sheets(video, summary)
+        if result.get("exported"):
+            console.print(f"[green]✓ Exported to Google Sheets[/green]")
+        elif result.get("reason") == "already exists":
+            console.print(f"[dim]↷ Already in Google Sheets[/dim]")
+        elif result.get("error"):
+            console.print(f"[red]✗ Sheet export failed: {result.get('error')}[/red]")
+
+    # Print summary preview
+    console.print("\n" + "=" * 60)
+    console.print("[bold]Summary Preview[/bold]")
+    console.print("=" * 60)
+    console.print(f"\n[bold]TL;DR:[/bold] {summary.tldr}")
+    console.print(f"\n[bold]Who Should Listen:[/bold] {summary.who_should_listen}")
+    if summary.guests:
+        console.print(f"\n[bold]Guests:[/bold] {', '.join(summary.guests)}")
+    console.print(f"\n[bold]Categories:[/bold] {', '.join(summary.categories)}")
+    console.print(f"\n[bold]Key Insights ({len(summary.key_insights)}):[/bold]")
+    for insight in summary.key_insights[:5]:
+        console.print(f"  • {insight}")
+    if len(summary.key_insights) > 5:
+        console.print(f"  [dim]... and {len(summary.key_insights) - 5} more[/dim]")
+
+
+def check_stratechery_cookies(selected_episodes: list[Episode]) -> bool:
+    """
+    Check if selected episodes include Stratechery and warn if cookies aren't set.
+
+    Args:
+        selected_episodes: List of episodes to process
+
+    Returns:
+        True if should proceed, False if user wants to abort
+    """
+    # Find Stratechery episodes in selection
+    stratechery_episodes = [ep for ep in selected_episodes if is_stratechery(ep)]
+
+    if not stratechery_episodes:
+        return True  # No Stratechery episodes, proceed
+
+    if has_stratechery_cookies():
+        return True  # Cookies are set, proceed
+
+    # Warn user about missing Stratechery cookies
+    console.print("\n" + "=" * 60)
+    console.print("[yellow][bold]⚠️  Stratechery Authentication Required[/bold][/yellow]")
+    console.print("=" * 60)
+    console.print(f"\nYou have selected [cyan]{len(stratechery_episodes)}[/cyan] Stratechery episode(s):")
+    for ep in stratechery_episodes[:5]:
+        console.print(f"  • {ep.title[:55]}...")
+    if len(stratechery_episodes) > 5:
+        console.print(f"  [dim]... and {len(stratechery_episodes) - 5} more[/dim]")
+
+    console.print("\n[yellow]Stratechery cookies are NOT set up.[/yellow]")
+    console.print("Without authentication, the system will fall back to YouTube search,")
+    console.print("which may find lower quality or incorrect matches.\n")
+
+    console.print("[bold]To set up Stratechery access:[/bold]")
+    console.print("  1. Log in to [cyan]stratechery.com[/cyan] in Chrome")
+    console.print("  2. Run: [green]podcastwise --refresh-stratechery-cookies[/green]")
+    console.print("  3. Then re-run this command\n")
+
+    # Ask user what to do
+    console.print("[bold]What would you like to do?[/bold]")
+    console.print("  [green]y[/green] = Continue anyway (use YouTube fallback)")
+    console.print("  [red]n[/red] = Abort and set up cookies first")
+
+    try:
+        response = input("\nContinue without Stratechery auth? [y/N]: ").strip().lower()
+    except (KeyboardInterrupt, EOFError):
+        return False
+
+    if response == 'y':
+        console.print("[dim]Proceeding with YouTube fallback for Stratechery episodes...[/dim]")
+        return True
+    else:
+        console.print("\n[cyan]Run 'podcastwise --refresh-stratechery-cookies' after logging in.[/cyan]")
+        return False
+
+
 def cmd_run(args):
     """Main interactive mode: select episodes and run pipeline."""
     from .selector import select_episodes, display_selection_summary, confirm_selection
@@ -346,6 +482,10 @@ def cmd_run(args):
             return
 
         display_selection_summary(selected)
+
+    # Check for Stratechery episodes and warn if cookies not set
+    if not check_stratechery_cookies(selected):
+        return
 
     # Add dry-run, force, and auto-sync info
     if args.dry_run:
@@ -586,6 +726,12 @@ Examples:
         metavar='TERM',
         help='Clear specific episodes from not-found cache by search terms. Example: --retry-episodes "Satya Nadella" "20VC"'
     )
+    parser.add_argument(
+        '--youtube',
+        type=str,
+        metavar='URL',
+        help='Summarize a YouTube video directly (no Apple Podcasts required). Example: --youtube "https://www.youtube.com/watch?v=VIDEO_ID"'
+    )
 
     args = parser.parse_args()
 
@@ -640,6 +786,8 @@ Examples:
         console.print("\n[dim]Set default in .env: DEFAULT_MODEL=haiku[/dim]")
     elif args.retry_episodes:
         cmd_retry_episodes(args)
+    elif args.youtube:
+        cmd_youtube(args)
     elif args.list:
         cmd_list(args)
     elif args.stats:

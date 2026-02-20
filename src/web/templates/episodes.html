@@ -1,0 +1,395 @@
+{% extends "base.html" %}
+
+{% block title %}Episodes - Podcastwise{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Episode Browser</h1>
+    <p class="subtitle">Browse, filter, and select episodes for processing</p>
+</div>
+
+<!-- Filters Bar -->
+<div class="filters-bar">
+    <div class="filter-group">
+        <label for="filter-show">Show</label>
+        <select id="filter-show">
+            <option value="">All Shows</option>
+        </select>
+    </div>
+
+    <div class="filter-group">
+        <label for="filter-status">Status</label>
+        <select id="filter-status">
+            <option value="">All</option>
+            <option value="new">New (unprocessed)</option>
+            <option value="processed">Processed</option>
+            <option value="no_transcript">No Transcript</option>
+        </select>
+    </div>
+
+    <div class="filter-group">
+        <label for="filter-source">Source</label>
+        <select id="filter-source">
+            <option value="">All Sources</option>
+            <option value="apple">Apple Podcasts</option>
+            <option value="rss">RSS Feed</option>
+        </select>
+    </div>
+
+    <div class="filter-group">
+        <label for="filter-limit">Show</label>
+        <select id="filter-limit">
+            <option value="25">25 episodes</option>
+            <option value="50">50 episodes</option>
+            <option value="100">100 episodes</option>
+            <option value="">All</option>
+        </select>
+    </div>
+
+    <button class="btn btn-secondary" id="apply-filters">Apply Filters</button>
+    <button class="btn btn-link" id="clear-filters">Clear</button>
+</div>
+
+<!-- Selection Actions -->
+<div class="selection-bar" id="selection-bar" style="display: none;">
+    <span class="selection-count"><strong id="selected-count">0</strong> episodes selected</span>
+    <div class="selection-actions">
+        <button class="btn btn-primary" id="process-selected">Process Selected</button>
+        <button class="btn btn-secondary" id="select-all">Select All Visible</button>
+        <button class="btn btn-link" id="clear-selection">Clear Selection</button>
+    </div>
+</div>
+
+<!-- Episodes Table -->
+<div class="episodes-table-container">
+    <table class="episodes-table" id="episodes-table">
+        <thead>
+            <tr>
+                <th class="col-checkbox">
+                    <input type="checkbox" id="select-all-checkbox" title="Select all">
+                </th>
+                <th class="col-date">Date</th>
+                <th class="col-show">Show</th>
+                <th class="col-title">Episode Title</th>
+                <th class="col-duration">Duration</th>
+                <th class="col-source">Source</th>
+                <th class="col-status">Status</th>
+                <th class="col-actions">Actions</th>
+            </tr>
+        </thead>
+        <tbody id="episodes-body">
+            <tr class="loading-row">
+                <td colspan="8">Loading episodes...</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+
+<!-- Episode Row Template -->
+<template id="episode-row-template">
+    <tr class="episode-row" data-episode-id="">
+        <td class="col-checkbox">
+            <input type="checkbox" class="episode-checkbox">
+        </td>
+        <td class="col-date"></td>
+        <td class="col-show"></td>
+        <td class="col-title">
+            <span class="episode-title"></span>
+            <span class="episode-description"></span>
+        </td>
+        <td class="col-duration"></td>
+        <td class="col-source">
+            <span class="source-badge"></span>
+        </td>
+        <td class="col-status">
+            <span class="status-badge"></span>
+        </td>
+        <td class="col-actions">
+            <button class="btn btn-small btn-view" title="View summary">View</button>
+        </td>
+    </tr>
+</template>
+
+<!-- Summary Modal -->
+<div class="modal" id="summary-modal" style="display: none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2 id="modal-title">Episode Summary</h2>
+            <button class="modal-close" onclick="closeSummaryModal()">&times;</button>
+        </div>
+        <div class="modal-body" id="modal-body">
+            <!-- Summary content loaded here -->
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let selectedEpisodes = new Set();
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadFilters();
+    loadEpisodes();
+
+    document.getElementById('apply-filters').addEventListener('click', loadEpisodes);
+    document.getElementById('clear-filters').addEventListener('click', clearFilters);
+    document.getElementById('select-all-checkbox').addEventListener('change', toggleSelectAll);
+    document.getElementById('process-selected').addEventListener('click', processSelected);
+    document.getElementById('select-all').addEventListener('click', selectAllVisible);
+    document.getElementById('clear-selection').addEventListener('click', clearSelection);
+});
+
+async function loadFilters() {
+    // Load shows for filter dropdown
+    try {
+        const res = await fetch('/api/shows');
+        const shows = await res.json();
+
+        const select = document.getElementById('filter-show');
+        shows.forEach(show => {
+            const option = document.createElement('option');
+            option.value = show.podcast_name;
+            option.textContent = show.podcast_name;
+            select.appendChild(option);
+        });
+    } catch (err) {
+        console.error('Failed to load filters:', err);
+    }
+}
+
+async function loadEpisodes() {
+    const params = new URLSearchParams();
+
+    const show = document.getElementById('filter-show').value;
+    const status = document.getElementById('filter-status').value;
+    const source = document.getElementById('filter-source').value;
+    const limit = document.getElementById('filter-limit').value;
+
+    if (show) params.set('show', show);
+    if (status) params.set('status', status);
+    if (source) params.set('source', source);
+    if (limit) params.set('limit', limit);
+
+    const tbody = document.getElementById('episodes-body');
+    tbody.innerHTML = '<tr class="loading-row"><td colspan="8">Loading episodes...</td></tr>';
+
+    try {
+        const res = await fetch('/api/episodes?' + params.toString());
+        const episodes = await res.json();
+
+        renderEpisodes(episodes);
+    } catch (err) {
+        tbody.innerHTML = '<tr><td colspan="8" class="error">Failed to load episodes</td></tr>';
+    }
+}
+
+function renderEpisodes(episodes) {
+    const tbody = document.getElementById('episodes-body');
+    tbody.innerHTML = '';
+
+    if (episodes.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" class="empty">No episodes found matching filters</td></tr>';
+        return;
+    }
+
+    episodes.forEach(ep => {
+        const row = createEpisodeRow(ep);
+        tbody.appendChild(row);
+    });
+
+    updateSelectionUI();
+}
+
+function createEpisodeRow(ep) {
+    const tr = document.createElement('tr');
+    tr.className = 'episode-row';
+    tr.dataset.episodeId = ep.id;
+    tr.dataset.source = ep.source;
+
+    const dateStr = ep.date_published
+        ? new Date(ep.date_published).toLocaleDateString()
+        : (ep.date_played ? new Date(ep.date_played).toLocaleDateString() : '-');
+
+    const statusClass = {
+        'new': 'status-new',
+        'processed': 'status-processed',
+        'no_transcript': 'status-no-transcript',
+        'error': 'status-error'
+    }[ep.status] || '';
+
+    const statusText = {
+        'new': 'New',
+        'processed': 'Processed',
+        'no_transcript': 'No Transcript',
+        'error': 'Error'
+    }[ep.status] || ep.status;
+
+    tr.innerHTML = `
+        <td class="col-checkbox">
+            <input type="checkbox" class="episode-checkbox"
+                   ${selectedEpisodes.has(ep.id) ? 'checked' : ''}
+                   onchange="toggleEpisode('${ep.id}')">
+        </td>
+        <td class="col-date">${dateStr}</td>
+        <td class="col-show">${escapeHtml(ep.podcast_name)}</td>
+        <td class="col-title">
+            <span class="episode-title">${escapeHtml(ep.title)}</span>
+        </td>
+        <td class="col-duration">${ep.duration_formatted || '-'}</td>
+        <td class="col-source">
+            <span class="source-badge source-${ep.source}">${ep.source === 'apple' ? 'Apple' : 'RSS'}</span>
+        </td>
+        <td class="col-status">
+            <span class="status-badge ${statusClass}">${statusText}</span>
+        </td>
+        <td class="col-actions">
+            ${ep.status === 'processed' ?
+                `<button class="btn btn-small btn-view" onclick="viewSummary('${ep.id}')">View</button>` :
+                ''}
+        </td>
+    `;
+
+    return tr;
+}
+
+function toggleEpisode(episodeId) {
+    if (selectedEpisodes.has(episodeId)) {
+        selectedEpisodes.delete(episodeId);
+    } else {
+        selectedEpisodes.add(episodeId);
+    }
+    updateSelectionUI();
+}
+
+function toggleSelectAll() {
+    const checked = document.getElementById('select-all-checkbox').checked;
+    document.querySelectorAll('.episode-checkbox').forEach(cb => {
+        cb.checked = checked;
+        const id = cb.closest('tr').dataset.episodeId;
+        if (checked) {
+            selectedEpisodes.add(id);
+        } else {
+            selectedEpisodes.delete(id);
+        }
+    });
+    updateSelectionUI();
+}
+
+function selectAllVisible() {
+    document.querySelectorAll('.episode-checkbox').forEach(cb => {
+        cb.checked = true;
+        selectedEpisodes.add(cb.closest('tr').dataset.episodeId);
+    });
+    updateSelectionUI();
+}
+
+function clearSelection() {
+    selectedEpisodes.clear();
+    document.querySelectorAll('.episode-checkbox').forEach(cb => cb.checked = false);
+    document.getElementById('select-all-checkbox').checked = false;
+    updateSelectionUI();
+}
+
+function updateSelectionUI() {
+    const bar = document.getElementById('selection-bar');
+    const count = document.getElementById('selected-count');
+
+    if (selectedEpisodes.size > 0) {
+        bar.style.display = 'flex';
+        count.textContent = selectedEpisodes.size;
+    } else {
+        bar.style.display = 'none';
+    }
+}
+
+async function processSelected() {
+    if (selectedEpisodes.size === 0) return;
+
+    const episodeIds = Array.from(selectedEpisodes);
+
+    // Navigate to processing page with selected episodes
+    const params = new URLSearchParams();
+    params.set('episodes', episodeIds.join(','));
+    window.location.href = '/processing?' + params.toString();
+}
+
+async function viewSummary(episodeId) {
+    const modal = document.getElementById('summary-modal');
+    const body = document.getElementById('modal-body');
+
+    body.innerHTML = '<div class="loading">Loading summary...</div>';
+    modal.style.display = 'flex';
+
+    try {
+        const res = await fetch(`/api/episodes/${episodeId}/summary`);
+        const summary = await res.json();
+
+        body.innerHTML = renderSummary(summary);
+    } catch (err) {
+        body.innerHTML = '<div class="error">Failed to load summary</div>';
+    }
+}
+
+function renderSummary(summary) {
+    return `
+        <section class="summary-section">
+            <h3>TL;DR</h3>
+            <p>${escapeHtml(summary.tldr)}</p>
+        </section>
+
+        <section class="summary-section">
+            <h3>Key Insights</h3>
+            <ul>
+                ${summary.key_insights.map(i => `<li>${escapeHtml(i)}</li>`).join('')}
+            </ul>
+        </section>
+
+        ${summary.soundbites?.length ? `
+        <section class="summary-section">
+            <h3>Soundbites</h3>
+            ${summary.soundbites.map(sb => `
+                <blockquote>
+                    <p>"${escapeHtml(sb.quote)}"</p>
+                    <cite>— ${escapeHtml(sb.speaker)}</cite>
+                </blockquote>
+            `).join('')}
+        </section>
+        ` : ''}
+
+        ${summary.takeaways?.length ? `
+        <section class="summary-section">
+            <h3>Takeaways</h3>
+            <ul>
+                ${summary.takeaways.map(t => `<li>${escapeHtml(t)}</li>`).join('')}
+            </ul>
+        </section>
+        ` : ''}
+    `;
+}
+
+function closeSummaryModal() {
+    document.getElementById('summary-modal').style.display = 'none';
+}
+
+function clearFilters() {
+    document.getElementById('filter-show').value = '';
+    document.getElementById('filter-status').value = '';
+    document.getElementById('filter-source').value = '';
+    document.getElementById('filter-limit').value = '25';
+    loadEpisodes();
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// Close modal on outside click
+document.getElementById('summary-modal').addEventListener('click', function(e) {
+    if (e.target === this) closeSummaryModal();
+});
+</script>
+{% endblock %}
