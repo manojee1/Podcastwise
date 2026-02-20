@@ -397,14 +397,14 @@ def extract_guest_names(title: str) -> list[str]:
     # Pattern 1: "Name Name:" or "Name Name -" at the start
     # e.g., "Christian Klein: SAP's Vision for AI"
     start_match = re.match(
-        r'^([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)(?:\s*[&,]\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+))*\s*[:–\-]',
+        r'^([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)(?:\s*[&,]\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+))*\s*[:–—\-]',
         title
     )
     if start_match:
         # Extract all names from the match
         full_match = start_match.group(0)
         # Remove the trailing delimiter
-        names_part = re.sub(r'\s*[:–\-]$', '', full_match)
+        names_part = re.sub(r'\s*[:–—\-]$', '', full_match)
         # Split by & or , to get individual names
         for name in re.split(r'\s*[&,]\s*', names_part):
             name = name.strip()
