@@ -36,6 +36,15 @@ PHASE3_IDS = {
     67210,  # Stratechery / Michael Morton (YouTube mismatch)
 }
 
+# Phase 4: Feb 2026 batch — extract_guest_names bugs fixed (5 episodes)
+PHASE4_IDS = {
+    57009,  # The Daily: Modern Love, With Rob Delaney (bug: capital With)
+    57008,  # Lenny's: Anthropic co-founder | Ben Mann (bug: pipe-end + co-founder)
+    57128,  # Decoder: Can we ever trust an AI lawyer? (no guest → low-bar match)
+    57359,  # a16z: Steven Sinofsky & Balaji Srinivasan on... (bug: & before on)
+    58111,  # Stratechery: YouTube CEO Neal Mohan (bug: short last-name false pos)
+}
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -43,8 +52,8 @@ def main():
     )
     parser.add_argument("--dry-run", action="store_true",
                         help="Preview without processing")
-    parser.add_argument("--phase", choices=["1", "3", "all"], default="all",
-                        help="Which phase to process (1=Stratechery, 3=YouTube, all=both)")
+    parser.add_argument("--phase", choices=["1", "3", "4", "all"], default="all",
+                        help="Which phase to process (1=Stratechery, 3=YouTube, 4=Feb2026, all=all)")
     parser.add_argument("--model", default=DEFAULT_MODEL,
                         help=f"Model to use (default: {DEFAULT_MODEL})")
     parser.add_argument("--no-rate-limit", action="store_true",
@@ -57,6 +66,8 @@ def main():
         target_ids |= PHASE1_IDS
     if args.phase in ("3", "all"):
         target_ids |= PHASE3_IDS
+    if args.phase in ("4", "all"):
+        target_ids |= PHASE4_IDS
 
     # Fetch episodes from Apple Podcasts DB
     all_episodes = get_episodes_since()

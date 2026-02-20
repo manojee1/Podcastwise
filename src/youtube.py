@@ -419,9 +419,10 @@ def extract_guest_names(title: str) -> list[str]:
     # Limit to exactly 2 capitalized words (first + last name) so we don't
     # accidentally capture "Bret Taylor About AI" or similar phrases.
     role_match = re.search(
-        r'\b(?:CEO|CTO|CFO|CPO|COO|CSO|President|Chairman|Co-Founder|Co-CEO)\s+'
+        r'\b(?:CEO|CTO|CFO|CPO|COO|CSO|President|Chairman|Founder|Co-Founder|Co-CEO)\s+'
         r'([A-Z][a-z]+\s+[A-Z][a-z]+)',
-        title
+        title,
+        re.IGNORECASE,
     )
     if role_match:
         name = role_match.group(1).strip()
@@ -436,7 +437,7 @@ def extract_guest_names(title: str) -> list[str]:
     # "About", "On", etc. being pulled in.
     # e.g., "The Future of AI with Sundar Pichai" → "Sundar Pichai"
     with_match = re.search(
-        r'\bwith\s+([A-Z][a-z]+\s+[A-Z][a-z]+)',
+        r'\b[Ww]ith\s+([A-Z][a-z]+\s+[A-Z][a-z]+)',
         title,
     )
     if with_match:
@@ -446,16 +447,29 @@ def extract_guest_names(title: str) -> list[str]:
         return guests
 
     # Pattern 3: "Guest Name on Topic" (name at start, followed by " on ")
-    # e.g., "Sam Altman on the Future of OpenAI"
+    # Handles single guest: "Sam Altman on the Future of OpenAI"
+    # Handles multiple guests: "Steven Sinofsky & Balaji Srinivasan on AI"
     on_match = re.match(
-        r'^([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\s+on\s+',
+        r'^([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+(?:\s*[&,]\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)*)\s+on\s+',
         title
     )
     if on_match:
-        name = on_match.group(1).strip()
-        if len(name.split()) >= 2:
+        names_part = on_match.group(1).strip()
+        for name in re.split(r'\s*[&,]\s*', names_part):
+            name = name.strip()
+            if name and len(name.split()) >= 2 and is_likely_name(name):
+                guests.append(name)
+        if guests:
+            return guests
+
+    # Pattern 4: "| First Last" at end of title
+    # e.g., "Anthropic co-founder on quitting OpenAI... | Ben Mann"
+    pipe_end_match = re.search(r'\|\s*([A-Z][a-z]+\s+[A-Z][a-z]+)\s*$', title)
+    if pipe_end_match:
+        name = pipe_end_match.group(1).strip()
+        if is_likely_name(name):
             guests.append(name)
-        return guests
+            return guests
 
     return guests
 
@@ -501,9 +515,10 @@ def name_appears_in_text(name: str, text: str) -> bool:
     if re.search(pattern, text_lower):
         return True
 
-    # Check if last name appears (for distinctive last names)
-    # Only match if it's a word boundary match
-    if re.search(rf'\b{re.escape(last_name)}\b', text_lower):
+    # Check if last name appears — only for distinctive (long) last names.
+    # Short last names like "Mann", "Neal", "Patel" are too common and cause
+    # false positives against unrelated titles.
+    if len(last_name) >= 6 and re.search(rf'\b{re.escape(last_name)}\b', text_lower):
         return True
 
     return False
