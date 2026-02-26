@@ -313,6 +313,7 @@ def build_search_query(episode: Episode, variant: str = "primary") -> str:
     title = re.sub(r'^#?\d+\s*[-–:]\s*', '', title)              # Episode numbers like "#123 - "
     title = re.sub(r'^Ep\.?\s*\d+\s*[-–:]\s*', '', title, flags=re.IGNORECASE)  # "Ep. 45:"
     title = re.sub(r'\s*\|.*$', '', title)                        # Pipe suffixes
+    title = re.sub(r'\s*,\s*(?:Vol|Pt|Part)\.?\s*(?:[IVXLC]+|[0-9]+)\s*$', '', title, flags=re.IGNORECASE)  # ", Vol. III" / ", Pt. 2"
     title = title.strip()
 
     # 3. Extract guest names from title patterns
@@ -393,6 +394,19 @@ def extract_guest_names(title: str) -> list[str]:
             return False
         # All parts should be capitalized words
         return all(part[0].isupper() for part in parts)
+
+    # Pattern 0: "Guest Name, Vol. III" — repeat-guest volume episodes
+    # e.g., "Gary Oldman, Vol. III" → "Gary Oldman"
+    # e.g., "Benedict Cumberbatch, Pt. 2" → "Benedict Cumberbatch"
+    vol_match = re.match(
+        r'^([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\s*,\s*(?:Vol|Pt|Part)\.?\s',
+        title,
+    )
+    if vol_match:
+        name = vol_match.group(1).strip()
+        if is_likely_name(name):
+            guests.append(name)
+            return guests
 
     # Pattern 1: "Name Name:" or "Name Name -" at the start
     # e.g., "Christian Klein: SAP's Vision for AI"
