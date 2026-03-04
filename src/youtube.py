@@ -376,6 +376,12 @@ def extract_guest_names(title: str) -> list[str]:
     """
     guests = []
 
+    # Strip leading all-caps org abbreviation prefix before pattern matching.
+    # e.g., "A16Z's David George on AI" → "David George on AI"
+    # Matches sequences like "A16Z's", "NPR's", "IBM's" (uppercase + digits only).
+    # Does NOT strip mixed-case prefixes like "McKinsey's" to avoid false positives.
+    title = re.sub(r"^[A-Z][A-Z0-9]*'s\s+", '', title)
+
     # Common words that are NOT names (to filter false positives)
     non_name_words = {
         'weekly', 'daily', 'monthly', 'annual', 'special', 'bonus', 'live',
