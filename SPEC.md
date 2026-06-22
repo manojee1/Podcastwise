@@ -2,7 +2,7 @@
 
 ## Overview
 
-A CLI tool that extracts podcast listening history from Apple Podcasts on macOS, finds transcripts, and generates structured markdown summaries using an LLM.
+A CLI tool that extracts podcast listening history from Apple Podcasts on macOS (plus a YouTube "watched" playlist as a second episode source), finds transcripts — via YouTube, or directly from the Stratechery blog, the JP Morgan Eye on the Market site, or Lenny's Podcast's GitHub transcript archive, depending on the show — and generates structured markdown summaries using an LLM (Claude, or other providers via OpenRouter).
 
 ---
 
@@ -61,10 +61,27 @@ A CLI tool that extracts podcast listening history from Apple Podcasts on macOS,
 - Duration
 - Play progress (to determine partial vs complete listen)
 
-### Transcript Sources
+### YouTube Watched Playlist
 
-1. **YouTube** — Search `{podcast name} {episode title}`, extract captions
-2. **Not Found** — If no YouTube video/transcript available, mark episode as "transcript not found" and skip (will retry on next run)
+An alternate episode source (`src/youtube_watched.py`): videos from a YouTube "Podcasts" playlist (default `YOUTUBE_WATCHED_PLAYLIST_URL`), for long-form interviews watched directly on YouTube rather than in Apple Podcasts. Episodes are merged into the default episode list (sorted together with Apple Podcasts history by date) and flow through the same pipeline, state file, and Google Sheet. Matched to their transcript by video ID directly — no search/matching needed. `--youtube-watched` runs against just this source.
+
+### Per-Podcast Transcript Sources
+
+Some shows have a higher-quality transcript source than YouTube and are special-cased ahead of the general YouTube search:
+
+- **Stratechery** (`src/stratechery.py`) — fetches the matching blog post from the Stratechery archive (requires session cookies). Matching uses title similarity *and* a minimum content-word-overlap gate, since Stratechery post titles share a lot of boilerplate ("Interview with X CEO A" vs. "...CEO B") that fools plain similarity scoring.
+- **JP Morgan Eye on the Market** (`src/jpmorgan.py`) — fetches the article transcript from the JP Morgan Asset Management site. Falls through to YouTube search if the article fetch fails.
+- **Lenny's Podcast** (`src/lenny.py`) — fetches pre-existing transcripts from the `ChatPRD/lennys-podcast-transcripts` GitHub repo. Also used standalone via `scripts/process_lenny.py` to bulk-process the whole archive into an isolated output directory and Sheet.
+
+### Transcript Acquisition Order
+
+For a given episode, `fetch_transcript_for_episode()` (`src/youtube.py`) tries, in order:
+
+1. **Cache** — previously-fetched transcript for this episode ID, if present
+2. **Explicit YouTube URL** — `--youtube-url` override, or a known URL carried on the episode (e.g. from the watched playlist)
+3. **Stratechery / JP Morgan** — if the episode matches one of these shows
+4. **YouTube search** — multiple query variants tried, candidates scored for confidence (`find_best_match`); a low-confidence or guest-mismatched candidate (`validate_match`) is either auto-rejected (`--batch`, logged as `[WARN]`) or shown to the user for an accept/reject prompt (interactive mode)
+5. **Not Found** — if nothing matches, mark episode as "transcript not found" and skip (will retry on next run via `--retry`)
 
 **Note:** Raw transcripts are cached locally after fetching to enable re-summarization without re-fetching.
 
@@ -146,10 +163,13 @@ youtube_url: "{URL if found}"
 | Database Access | `sqlite3` (built-in) |
 | YouTube Search | `yt-dlp` |
 | YouTube Transcripts | `youtube-transcript-api` |
-| LLM | Claude API (`anthropic` SDK) |
+| LLM | Claude API (`anthropic` SDK), other providers via OpenRouter (`openai` SDK) |
+| Blog/Article Scraping | `requests` + `beautifulsoup4` (Stratechery, JP Morgan) |
 | CLI Interface | `rich` + `inquirer` or `textual` |
+| Web UI | `flask` (optional, `src/web/`) |
 | Config | `.env` file for API keys |
 | State Tracking | JSON file for processed episodes |
+| Export | Google Sheets (`gspread`, `google-auth`) |
 
 ---
 
@@ -157,8 +177,14 @@ youtube_url: "{URL if found}"
 
 ### Environment Variables
 ```
-ANTHROPIC_API_KEY=sk-ant-...  # Get from console.anthropic.com
+ANTHROPIC_API_KEY=sk-ant-...          # Get from console.anthropic.com
 PODCASTWISE_OUTPUT_DIR=~/Documents/PodcastNotes
+OPENROUTER_API_KEY=sk-or-v1-...       # Optional: GPT-4, Llama, Gemini, etc. via OpenRouter
+DEFAULT_MODEL=sonnet                  # Optional: default model alias
+GOOGLE_SHEETS_CREDENTIALS=~/path/to/credentials.json   # Optional: Sheets export
+GOOGLE_SHEET_ID=...                   # Optional: Sheets export
+YOUTUBE_WATCHED_PLAYLIST_URL=...      # Optional: override the watched-playlist source
+YOUTUBE_COOKIE_BROWSER=chrome         # Optional: default browser for cookie extraction
 ```
 
 ### Categories
@@ -190,6 +216,8 @@ Fixed list (LLM can extend if content doesn't fit):
 | API rate limits | Exponential backoff, queue remaining |
 | Partial listen | Include in list, marked as "partial" |
 | Non-English podcast | Claude can summarize if transcript available |
+| Uncertain YouTube match (below confidence threshold, or expected guest missing from title) | Interactive: prompt user to accept/reject the candidate. `--batch`: auto-reject, log `[WARN]` |
+| Per-podcast source fetch fails (Stratechery cookies expired, JP Morgan article missing) | Fall through to general YouTube search |
 
 ---
 
@@ -239,12 +267,31 @@ Fixed list (LLM can extend if content doesn't fit):
 - [x] `--batch` mode for non-interactive processing
 - [x] `--status` command to show processing status
 
+### Phase 7: Multi-Source Transcripts ✅
+- [x] Stratechery blog source with content-word-overlap match gating (`src/stratechery.py`)
+- [x] JP Morgan Eye on the Market source, falls through to YouTube on failure (`src/jpmorgan.py`)
+- [x] Lenny's Podcast GitHub transcript archive (`src/lenny.py`, `scripts/process_lenny.py`)
+- [x] YouTube-watched playlist as a second episode source, merged into the default list (`src/youtube_watched.py`)
+- [x] Confidence-scored YouTube matching (`find_best_match`/`validate_match`) with interactive low-confidence accept/reject prompt
+
+### Phase 8: Multi-Provider LLM & Cookie Auth ✅
+- [x] Model alias system supporting Anthropic direct API and OpenRouter (GPT-4, Llama, DeepSeek, Gemini, etc.)
+- [x] `--model`/`DEFAULT_MODEL` selection, `--list-models`
+- [x] YouTube cookie extraction/import to bypass IP blocks (`--refresh-cookies`, `--set-cookies`)
+
+### Phase 9: Google Sheets Export ✅
+- [x] Export summaries to a Google Sheet, per-year tabs
+- [x] Duplicate detection/cleanup, `--sync-export-state`, `--auto-sync`
+- [x] Retry failed transcript fetches (`--retry`/`--retry-episodes`)
+
+### Phase 10: Web UI ✅
+- [x] Standalone Flask app (`src/web/`) for browsing/processing through a browser, reusing the same pipeline modules
+
 ---
 
 ## Future Enhancements (Out of Scope for v1)
 
 - Whisper fallback for episodes without YouTube transcripts
-- Web UI for browsing summaries
 - Search across all summaries
 - Obsidian/Notion integration
 - Auto-run on new episode played
@@ -262,6 +309,7 @@ Fixed list (LLM can extend if content doesn't fit):
 | Keep transcripts? | Yes — cache raw transcripts permanently for re-summarization |
 | Partial listens? | Include in list, marked as "partial" |
 | Re-summarize? | Skip by default, use `--force` flag to re-process |
+| Multiple transcript sources? | Yes — cache, explicit URL override, Stratechery, JP Morgan, then YouTube search, tried in priority order; per-podcast sources fall through to YouTube on failure |
 
 ---
 
