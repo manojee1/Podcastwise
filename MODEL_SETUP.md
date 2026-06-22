@@ -20,6 +20,7 @@ OpenRouter:
   gpt-4-turbo  → openai/gpt-4-turbo
   llama-70b    → meta-llama/llama-3-70b-instruct
   deepseek     → deepseek/deepseek-chat
+  gemini-flash-3 → google/gemini-3-flash-preview
 ```
 
 ## Setup
@@ -77,6 +78,7 @@ Now all runs will use Haiku unless you specify `--model`.
 | `opus` | Slow | Highest | $$$$ |
 | `gpt-4o` | Fast | High | $$ |
 | `deepseek` | Fast | Good | $ |
+| `gemini-flash-3` | Fast | Good | $ |
 
 ## Examples
 

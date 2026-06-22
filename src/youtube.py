@@ -808,6 +808,7 @@ def fetch_transcript_for_episode(
     episode: Episode,
     use_cache: bool = True,
     youtube_url: Optional[str] = None,
+    on_low_confidence_match=None,
 ) -> Optional[Transcript]:
     """
     Fetch transcript for a podcast episode.
@@ -888,23 +889,36 @@ def fetch_transcript_for_episode(
     is_valid, rejection_reason = validate_match(episode, match_result)
 
     if not is_valid:
-        # Log warning for rejected matches
-        import sys
-        print(
-            f"[WARN] Rejected YouTube match for '{episode.title[:50]}...': {rejection_reason}",
-            file=sys.stderr
-        )
-        if match_result.match:
+        if match_result.match is not None and on_low_confidence_match is not None:
+            accepted = on_low_confidence_match(
+                episode_title=episode.title,
+                podcast_name=episode.podcast_name,
+                candidate_title=match_result.match.title,
+                candidate_channel=match_result.match.channel or "",
+                confidence=match_result.confidence,
+                reason=rejection_reason,
+                video_url=match_result.match.url,
+            )
+            if not accepted:
+                return None
+            # accepted: fall through to best_match = match_result.match below
+        else:
+            import sys
             print(
-                f"       Video was: '{match_result.match.title}' (confidence: {match_result.confidence})",
+                f"[WARN] Rejected YouTube match for '{episode.title[:50]}...': {rejection_reason}",
                 file=sys.stderr
             )
-            if match_result.guest_names_missing:
+            if match_result.match:
                 print(
-                    f"       Missing guests: {match_result.guest_names_missing}",
+                    f"       Video was: '{match_result.match.title}' (confidence: {match_result.confidence})",
                     file=sys.stderr
                 )
-        return None
+                if match_result.guest_names_missing:
+                    print(
+                        f"       Missing guests: {match_result.guest_names_missing}",
+                        file=sys.stderr
+                    )
+            return None
 
     best_match = match_result.match
 

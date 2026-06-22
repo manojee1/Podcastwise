@@ -189,6 +189,29 @@ def run_interactive_selector() -> list[Episode]:
         return []
 
 
+def confirm_low_confidence_match(
+    episode_title: str,
+    podcast_name: str,
+    candidate_title: str,
+    candidate_channel: str,
+    confidence: float,
+    reason: str,
+    video_url: str,
+) -> bool:
+    """Show a low-confidence YouTube match candidate and ask the user to accept/reject."""
+    console.print(f"\n[yellow]⚠  Uncertain YouTube match[/yellow]")
+    console.print(f"  Episode:    [bold]{podcast_name}[/bold] — {episode_title[:70]}")
+    console.print(f"  Candidate:  [cyan]{candidate_title}[/cyan]")
+    console.print(f"  Channel:    {candidate_channel or 'Unknown'}")
+    console.print(f"  URL:        {video_url}")
+    console.print(f"  Confidence: {confidence:.2f}  ({reason})\n")
+    try:
+        response = input("  Use this video for the transcript? [y/N]: ").strip().lower()
+        return response == "y"
+    except (KeyboardInterrupt, EOFError):
+        return False
+
+
 if __name__ == "__main__":
     selected = run_interactive_selector()
     if selected:

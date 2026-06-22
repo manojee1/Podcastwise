@@ -12,6 +12,7 @@ Usage:
     podcastwise --force            # Re-process already summarized episodes
     podcastwise -n 1 --youtube-url "https://youtu.be/VIDEO_ID"
                                    # Use specific YouTube URL for an episode
+    podcastwise --youtube-watched  # Process "Podcasts watched on YouTube" playlist
 """
 
 import argparse
@@ -28,6 +29,14 @@ from .youtube import (
     load_not_found, clear_not_found_matching, get_not_found_count
 )
 from .stratechery import extract_stratechery_cookies, has_stratechery_cookies, is_stratechery
+from .youtube_watched import (
+    get_playlist_entries,
+    build_episode as build_youtube_watched_episode,
+    video_url as youtube_watched_video_url,
+    cache_episode_metadata,
+    load_cached_episodes,
+    get_merged_episodes,
+)
 
 
 def parse_date(date_str: str) -> datetime:
@@ -244,7 +253,7 @@ def cmd_export_sheets(args):
     console.print("[bold]Exporting to Google Sheets...[/bold]\n")
 
     # Get episodes for duration info
-    episodes = get_episodes_since()
+    episodes = get_episodes_since() + load_cached_episodes()
 
     result = export_to_sheets(
         episodes=episodes,
@@ -372,6 +381,60 @@ def cmd_youtube(args):
         console.print(f"  [dim]... and {len(summary.key_insights) - 5} more[/dim]")
 
 
+def cmd_youtube_watched(args):
+    """Process episodes from the 'Podcasts watched on YouTube' playlist."""
+    from .pipeline import run_pipeline, print_pipeline_summary
+    from .state import get_state_manager
+
+    console.print("\n[bold]YouTube Podcasts Watched[/bold]")
+    console.print("[dim]Fetching playlist entries...[/dim]\n")
+
+    episodes, fetch_ok = get_merged_episodes()
+    if not episodes:
+        console.print("[yellow]Playlist is empty or unreachable.[/yellow]")
+        if not has_cookies():
+            console.print(
+                '[dim]Tip: run `python3 -m src.cli --refresh-cookies '
+                '--browser "chrome:Default"` to authenticate.[/dim]'
+            )
+        return
+
+    console.print(f"[{'green' if fetch_ok else 'yellow'}]Found {len(episodes)} videos in playlist[/]")
+
+    if args.limit:
+        episodes = episodes[:args.limit]
+        console.print(f"[dim]Limiting to first {len(episodes)} entries[/dim]")
+
+    if args.dry_run:
+        console.print("\n[yellow]DRY RUN MODE - No changes will be made[/yellow]\n")
+        state = get_state_manager()
+        for ep in episodes:
+            marker = "[done]" if state.is_processed(ep.id) else ""
+            console.print(f"  - {ep.podcast_name[:25]:<25} | {ep.title[:50]:<50} {marker}")
+        return
+
+    # Single batch call — each episode.youtube_url carries the bypass URL
+    all_results = run_pipeline(
+        episodes=episodes,
+        force=args.force,
+        dry_run=False,
+        retry_no_transcript=args.retry,
+        rate_limit=not args.no_rate_limit,
+        model=args.model,
+        overwrite=args.overwrite,
+    )
+    print_pipeline_summary(all_results)
+
+    if args.auto_sync:
+        console.print("\n[cyan]Auto-syncing to Google Sheets...[/cyan]")
+        episodes_for_export = get_episodes_since() + load_cached_episodes()
+        export_result = export_to_sheets(episodes=episodes_for_export)
+        console.print(
+            f"[green]Exported {export_result['exported']} episodes, "
+            f"{export_result['duplicates']} already synced[/green]"
+        )
+
+
 def check_stratechery_cookies(selected_episodes: list[Episode]) -> bool:
     """
     Check if selected episodes include Stratechery and warn if cookies aren't set.
@@ -434,9 +497,14 @@ def cmd_run(args):
     from .pipeline import run_pipeline, print_pipeline_summary
 
     console.print("\n[bold]Podcastwise - Podcast Summarizer[/bold]")
-    console.print("[dim]Fetching episodes from Apple Podcasts...[/dim]\n")
+    console.print("[dim]Fetching episodes...[/dim]\n")
 
-    episodes = get_episodes_since()
+    apple_episodes = get_episodes_since()
+    yt_episodes, yt_ok = get_merged_episodes()
+    if not yt_ok and yt_episodes:
+        console.print("[dim]Could not refresh YouTube-watched playlist (showing cached)[/dim]")
+    episodes = apple_episodes + yt_episodes
+    episodes.sort(key=lambda ep: ep.date_played or datetime.min, reverse=True)
 
     if not episodes:
         console.print("[red]No episodes found since Jan 1, 2025.[/red]")
@@ -545,6 +613,7 @@ def cmd_run(args):
         model=model,
         overwrite=args.overwrite,
         youtube_url=args.youtube_url,
+        confirm_low_confidence=not args.batch,
     )
 
     print_pipeline_summary(results)
@@ -552,7 +621,7 @@ def cmd_run(args):
     # Auto-sync to Google Sheets if enabled (always run, not just when new summaries created)
     if args.auto_sync and not args.dry_run:
         console.print("\n[cyan]Auto-syncing to Google Sheets...[/cyan]")
-        episodes_for_export = get_episodes_since()
+        episodes_for_export = get_episodes_since() + load_cached_episodes()
         export_result = export_to_sheets(episodes=episodes_for_export)
         console.print(f"[green]Exported {export_result['exported']} episodes, {export_result['duplicates']} already synced[/green]")
 
@@ -732,6 +801,11 @@ Examples:
         metavar='URL',
         help='Summarize a YouTube video directly (no Apple Podcasts required). Example: --youtube "https://www.youtube.com/watch?v=VIDEO_ID"'
     )
+    parser.add_argument(
+        '--youtube-watched',
+        action='store_true',
+        help='Process episodes from the "Podcasts watched on YouTube" playlist'
+    )
 
     args = parser.parse_args()
 
@@ -788,6 +862,8 @@ Examples:
         cmd_retry_episodes(args)
     elif args.youtube:
         cmd_youtube(args)
+    elif args.youtube_watched:
+        cmd_youtube_watched(args)
     elif args.list:
         cmd_list(args)
     elif args.stats:

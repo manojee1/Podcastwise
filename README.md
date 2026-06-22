@@ -135,6 +135,7 @@ python3 -m src.cli -n 10 -m opus
 | `gpt-4-turbo` | GPT-4 Turbo | OpenRouter |
 | `llama-70b` | Llama 3 70B | OpenRouter |
 | `deepseek` | DeepSeek Chat | OpenRouter |
+| `gemini-flash-3` | Gemini 3 Flash Preview | OpenRouter |
 
 ## Google Sheets Export
 
@@ -229,7 +230,61 @@ python3 -m src.cli --refresh-cookies --browser firefox
 python3 -m src.cli --set-cookies ~/cookies.txt
 ```
 
+## YouTube Watched Playlist
+
+Process podcast episodes you've watched directly on YouTube (e.g., long-form
+interviews saved to a "Podcasts" playlist), using the same pipeline, output
+directory, state file, and Google Sheet as Apple Podcasts episodes.
+
+**This playlist is now merged in automatically** every time you run
+`python3 -m src.cli` — the interactive selector shows Apple Podcasts and
+YouTube-watched episodes together, sorted by date. Use `--youtube-watched`
+when you want to work with just the playlist on its own (e.g. to preview or
+limit to it specifically):
+
+```bash
+# Process only the playlist (skip Apple Podcasts entirely)
+python3 -m src.cli --youtube-watched
+
+# Test on a subset first
+python3 -m src.cli --youtube-watched -n 2
+
+# Preview without processing
+python3 -m src.cli --youtube-watched --dry-run
+
+# Process and auto-export to Google Sheets
+python3 -m src.cli --youtube-watched --auto-sync
+```
+
+By default, the playlist is
+`https://www.youtube.com/playlist?list=PLX-OwCwXqUc4`. Override with the
+`YOUTUBE_WATCHED_PLAYLIST_URL` environment variable.
+
+Notes:
+- Episodes are matched to YouTube videos directly by video ID — no
+  search/matching needed.
+- `date_published` is left empty (the "Date Created" column in Sheets will be
+  blank for these rows) — flat-playlist mode does not return upload dates.
+- Episode metadata is cached locally at
+  `.cache/youtube_watched_episodes.json` so `--export-sheets` can populate the
+  Duration column without re-fetching the playlist.
+
 ## Troubleshooting
+
+### "Uncertain YouTube match" prompt
+
+In interactive mode (not `--batch`), if the tool finds a candidate YouTube
+video but isn't confident it's the right one (e.g. low title-match
+confidence, or expected guest names missing from the video title), it will
+show you the candidate and ask:
+
+```
+Use this video for the transcript? [y/N]
+```
+
+Accept it to use that video, or decline to skip the episode (it can be
+retried later with `--retry` or a manual `--youtube-url`). In `--batch` mode,
+uncertain matches are always rejected automatically and logged as a `[WARN]`.
 
 ### "No transcript found" for an episode
 
@@ -284,6 +339,7 @@ Podcastwise/
 │   ├── cli.py          # Command-line interface
 │   ├── podcast_db.py   # Apple Podcasts database reader
 │   ├── youtube.py      # YouTube transcript fetcher
+│   ├── youtube_watched.py  # "Podcasts watched on YouTube" playlist source
 │   ├── summarizer.py   # AI summarization (Claude/GPT)
 │   ├── markdown.py     # Markdown file generation
 │   ├── sheets.py       # Google Sheets export

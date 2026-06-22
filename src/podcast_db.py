@@ -36,6 +36,7 @@ class Episode:
     feed_url: Optional[str]
     guid: Optional[str]
     description: Optional[str]
+    youtube_url: Optional[str] = None
 
     @property
     def duration_minutes(self) -> int:

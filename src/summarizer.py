@@ -41,6 +41,8 @@ MODEL_CONFIG = {
     "gpt-4-turbo": (PROVIDER_OPENROUTER, "openai/gpt-4-turbo"),
     "llama-70b": (PROVIDER_OPENROUTER, "meta-llama/llama-3-70b-instruct"),
     "deepseek": (PROVIDER_OPENROUTER, "deepseek/deepseek-chat"),
+    # Google models via OpenRouter
+    "gemini-flash-3": (PROVIDER_OPENROUTER, "google/gemini-3-flash-preview"),
 }
 
 # Default model

@@ -14,6 +14,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskPr
 from rich.table import Table
 
 from .podcast_db import Episode, get_episodes_since
+from .selector import confirm_low_confidence_match
 from .youtube import (
     fetch_transcript_for_episode,
     Transcript,
@@ -50,6 +51,7 @@ def run_pipeline(
     model: str = None,
     overwrite: bool = False,
     youtube_url: str = None,
+    confirm_low_confidence: bool = False,
 ) -> list[PipelineResult]:
     """
     Run the full summarization pipeline on selected episodes.
@@ -127,10 +129,23 @@ def run_pipeline(
     ) as progress:
         task = progress.add_task("Processing...", total=len(to_process))
 
+        if confirm_low_confidence:
+            def _on_low_confidence(**kwargs):
+                progress.stop()
+                try:
+                    return confirm_low_confidence_match(**kwargs)
+                finally:
+                    progress.start()
+        else:
+            _on_low_confidence = None
+
         for ep in to_process:
             progress.update(task, description=f"[cyan]{ep.podcast_name[:25]}[/cyan]")
 
-            result = _process_single_episode(ep, state, retry_no_transcript, rate_limit, model, overwrite, youtube_url)
+            result = _process_single_episode(
+                ep, state, retry_no_transcript, rate_limit, model, overwrite, youtube_url,
+                on_low_confidence_match=_on_low_confidence,
+            )
             results.append(result)
 
             progress.advance(task)
@@ -146,6 +161,7 @@ def _process_single_episode(
     model: str = None,
     overwrite: bool = False,
     youtube_url: str = None,
+    on_low_confidence_match=None,
 ) -> PipelineResult:
     """Process a single episode through the full pipeline."""
 
@@ -154,7 +170,13 @@ def _process_single_episode(
         if retry_no_transcript:
             clear_not_found(episode.id)
 
-        transcript = fetch_transcript_for_episode(episode, use_cache=True, youtube_url=youtube_url)
+        effective_youtube_url = youtube_url or episode.youtube_url
+        transcript = fetch_transcript_for_episode(
+            episode,
+            use_cache=True,
+            youtube_url=effective_youtube_url,
+            on_low_confidence_match=on_low_confidence_match,
+        )
 
         if not transcript:
             # Mark as no transcript
@@ -393,7 +415,7 @@ def _process_single_episode_with_progress(
         if retry_no_transcript:
             clear_not_found(episode.id)
 
-        transcript = fetch_transcript_for_episode(episode, use_cache=True)
+        transcript = fetch_transcript_for_episode(episode, use_cache=True, youtube_url=episode.youtube_url)
 
         if not transcript:
             state.mark_no_transcript(
