@@ -4,6 +4,14 @@ Newest entries first.
 
 ---
 
+## 2026-11-20 — DeepSeek V4.1 Flash model; Python 3.11 venv setup
+**Files:** `src/summarizer.py`, `README.md`, `CLAUDE.md`
+
+- Added `deepseek-v4.1-flash` → `deepseek/deepseek-v4.1-flash-1017` to `MODEL_CONFIG` (OpenRouter). Now used as the local default via `DEFAULT_MODEL=deepseek-v4.1-flash` in `.env` (code default remains `sonnet`).
+- Setup docs now require Python 3.11+ via a project `.venv`. macOS system `/usr/bin/python3` is 3.9, which `google-auth`/`google-api-core` flag as end-of-life with `FutureWarning`s on every run.
+
+---
+
 ## 2026-06-21 — YouTube-watched playlist; low-confidence match confirmation
 **Files:** `src/youtube_watched.py`, `src/cli.py`, `src/pipeline.py`, `src/selector.py`, `src/youtube.py`, `src/podcast_db.py`, `src/summarizer.py`, `scripts/process_lenny.py`
 

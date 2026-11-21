@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
-There is no build step, linter, or test suite in this repo — it's a plain Python CLI (`pip3 install -r requirements.txt`).
+There is no build step, linter, or test suite in this repo — it's a plain Python CLI. Requires Python 3.11+; use the project venv (`/opt/homebrew/bin/python3.11 -m venv .venv && .venv/bin/pip install -r requirements.txt`). System `/usr/bin/python3` is 3.9 and triggers Google EOL warnings — when Claude runs commands, use `.venv/bin/python` in place of `python3`.
 
 ```bash
 # Run the CLI (always as a module, never `python3 src/cli.py` or a bare `podcastwise`)

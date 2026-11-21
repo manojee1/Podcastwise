@@ -180,7 +180,7 @@ youtube_url: "{URL if found}"
 ANTHROPIC_API_KEY=sk-ant-...          # Get from console.anthropic.com
 PODCASTWISE_OUTPUT_DIR=~/Documents/PodcastNotes
 OPENROUTER_API_KEY=sk-or-v1-...       # Optional: GPT-4, Llama, Gemini, etc. via OpenRouter
-DEFAULT_MODEL=sonnet                  # Optional: default model alias
+DEFAULT_MODEL=sonnet                  # Optional: default model alias (e.g. deepseek-v4.1-flash for low-cost OpenRouter)
 GOOGLE_SHEETS_CREDENTIALS=~/path/to/credentials.json   # Optional: Sheets export
 GOOGLE_SHEET_ID=...                   # Optional: Sheets export
 YOUTUBE_WATCHED_PLAYLIST_URL=...      # Optional: override the watched-playlist source

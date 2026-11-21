@@ -24,8 +24,13 @@ cd Podcastwise
 
 ### 2. Install Dependencies
 
+Requires Python 3.11+ (macOS's built-in `/usr/bin/python3` is 3.9, which Google's auth libraries no longer support). Use a project virtualenv:
+
 ```bash
-pip3 install -r requirements.txt
+brew install python@3.11            # if not already installed
+python3.11 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+source .venv/bin/activate           # run this in each new terminal before using the CLI
 ```
 
 ### 3. Configure Environment
