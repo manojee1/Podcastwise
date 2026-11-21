@@ -30,7 +30,6 @@ Requires Python 3.11+ (macOS's built-in `/usr/bin/python3` is 3.9, which Google'
 brew install python@3.11            # if not already installed
 python3.11 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-source .venv/bin/activate           # run this in each new terminal before using the CLI
 ```
 
 ### 3. Configure Environment
@@ -44,7 +43,8 @@ ANTHROPIC_API_KEY=sk-ant-api03-...
 # Optional: OpenRouter API key (for GPT-4, Llama, etc.)
 OPENROUTER_API_KEY=sk-or-...
 
-# Optional: Default model (sonnet, haiku, opus, gpt-4o, etc.)
+# Optional: Default model (sonnet, haiku, opus, gpt-4o, deepseek-v4.1-flash, etc.)
+# Built-in default is sonnet; deepseek-v4.1-flash is a very low-cost OpenRouter option
 DEFAULT_MODEL=sonnet
 
 # Optional: Output directory (defaults to ~/Documents/PodcastNotes)
@@ -56,6 +56,8 @@ Get your API keys:
 - OpenRouter: https://openrouter.ai/keys
 
 ## Usage
+
+> Once `.venv` exists, plain `python3 -m src.cli ...` works even with macOS's system Python 3.9 — Podcastwise detects the old version and automatically re-launches itself under `.venv/bin/python`.
 
 ### Interactive Mode (Recommended)
 
@@ -127,6 +129,9 @@ python3 -m src.cli -n 10 -m gpt-4o
 
 # Use Claude Opus (most capable)
 python3 -m src.cli -n 10 -m opus
+
+# Use DeepSeek V4.1 Flash via OpenRouter (very low cost, 1M-token context)
+python3 -m src.cli -n 10 -m deepseek-v4.1-flash
 ```
 
 **Available Models:**
@@ -140,6 +145,7 @@ python3 -m src.cli -n 10 -m opus
 | `gpt-4-turbo` | GPT-4 Turbo | OpenRouter |
 | `llama-70b` | Llama 3 70B | OpenRouter |
 | `deepseek` | DeepSeek Chat | OpenRouter |
+| `deepseek-v4.1-flash` | DeepSeek V4.1 Flash 1017 | OpenRouter |
 | `gemini-flash-3` | Gemini 3 Flash Preview | OpenRouter |
 
 ## Google Sheets Export

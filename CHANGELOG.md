@@ -4,6 +4,15 @@ Newest entries first.
 
 ---
 
+## 2026-11-20 — Auto re-launch under project venv on old Python
+**Files:** `src/python_version.py`, `src/cli.py`, `src/web/app.py`, `scripts/process_lenny.py`, `requirements.txt`, `README.md`
+
+- Added `src/python_version.py:ensure_supported_python()`. If an entry point starts on Python < 3.10 and `.venv/bin/python` exists, it `os.execv`s the same command under the venv, so plain `python3 -m src.cli` no longer runs on macOS system Python 3.9 (which triggered yt-dlp's "Support for Python version 3.9 has been deprecated" and Google `FutureWarning`s). Wired into `src.cli`, `src.web.app` (only when run as `__main__`), and `scripts/process_lenny.py`. Prints setup instructions if no venv exists.
+- Added missing `pyyaml` to `requirements.txt` (used by `src/lenny.py`).
+- README adds `deepseek-v4.1-flash` to the model table and notes that activating the venv is optional.
+
+---
+
 ## 2026-11-20 — DeepSeek V4.1 Flash model; Python 3.11 venv setup
 **Files:** `src/summarizer.py`, `README.md`, `CLAUDE.md`
 

@@ -15,6 +15,9 @@ Usage:
     podcastwise --youtube-watched  # Process "Podcasts watched on YouTube" playlist
 """
 
+from .python_version import ensure_supported_python
+ensure_supported_python("src.cli" if __name__ == "__main__" else None)
+
 import argparse
 from datetime import datetime
 

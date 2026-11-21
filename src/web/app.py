@@ -4,6 +4,10 @@ Flask application factory for Podcastwise web UI.
 Run with: python -m src.web.app
 """
 
+if __name__ == "__main__":
+    from ..python_version import ensure_supported_python
+    ensure_supported_python("src.web.app")
+
 import os
 from flask import Flask, render_template, jsonify, request
 

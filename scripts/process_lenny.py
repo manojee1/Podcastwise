@@ -36,6 +36,10 @@ os.environ["GOOGLE_SHEET_ID"] = "14cYx9sHcvar77eT7gtriExaUEruaR-FCbJZxpxOtFu0"
 # Add project root to sys.path so `src` is importable when run directly
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+# Re-launch under the project's .venv if started with an old system Python
+from src.python_version import ensure_supported_python
+ensure_supported_python()
+
 # ── Now safe to import src modules ─────────────────────────────────────────
 from rich.console import Console
 from rich.progress import track

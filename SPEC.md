@@ -159,7 +159,7 @@ youtube_url: "{URL if found}"
 
 | Component | Technology |
 |-----------|------------|
-| Language | Python 3.11+ |
+| Language | Python 3.11+ (project `.venv`; entry points auto re-exec under it if started on an older Python) |
 | Database Access | `sqlite3` (built-in) |
 | YouTube Search | `yt-dlp` |
 | YouTube Transcripts | `youtube-transcript-api` |

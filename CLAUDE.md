@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
-There is no build step, linter, or test suite in this repo — it's a plain Python CLI. Requires Python 3.11+; use the project venv (`/opt/homebrew/bin/python3.11 -m venv .venv && .venv/bin/pip install -r requirements.txt`). System `/usr/bin/python3` is 3.9 and triggers Google EOL warnings — when Claude runs commands, use `.venv/bin/python` in place of `python3`.
+There is no build step, linter, or test suite in this repo — it's a plain Python CLI. Requires Python 3.11+; use the project venv (`/opt/homebrew/bin/python3.11 -m venv .venv && .venv/bin/pip install -r requirements.txt`). System `/usr/bin/python3` is 3.9 and triggers Google EOL warnings — when Claude runs commands, use `.venv/bin/python` in place of `python3`. Entry points call `src/python_version.py:ensure_supported_python()` before any third-party import, which re-execs under `.venv/bin/python` on Python < 3.10 — keep that call above other imports in new entry points.
 
 ```bash
 # Run the CLI (always as a module, never `python3 src/cli.py` or a bare `podcastwise`)
